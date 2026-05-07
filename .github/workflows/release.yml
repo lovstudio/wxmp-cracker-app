@@ -68,7 +68,7 @@ jobs:
         include:
           - name: Windows
             platform: windows-latest
-            args: ""
+            args: "--bundles nsis"
           - name: macOS Apple Silicon
             platform: macos-latest
             args: "--target aarch64-apple-darwin"
