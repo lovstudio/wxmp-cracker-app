@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="微探 logo">
+  <defs>
+    <linearGradient id="paper" x1="170" y1="112" x2="860" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF7" />
+      <stop offset="0.56" stop-color="#F4EFE4" />
+      <stop offset="1" stop-color="#E9DDCB" />
+    </linearGradient>
+    <linearGradient id="clay" x1="236" y1="142" x2="720" y2="892" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D88769" />
+      <stop offset="1" stop-color="#A85A43" />
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="176" fill="url(#paper)" />
+  <rect x="96" y="96" width="832" height="832" rx="176" fill="none" stroke="#D7C8B1" stroke-width="26" />
+  <path d="M238 178v668" stroke="url(#clay)" stroke-width="54" stroke-linecap="round" />
+  <path
+    d="M392 292v426h286"
+    fill="none"
+    stroke="#221E1A"
+    stroke-width="78"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M512 306h154l88 88v252c0 58-47 105-105 105H482"
+    fill="none"
+    stroke="#221E1A"
+    stroke-width="44"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.34"
+  />
+  <path d="M665 310v86h88" fill="none" stroke="#221E1A" stroke-width="38" stroke-linecap="round" stroke-linejoin="round" opacity="0.34" />
+  <path d="M498 488h134" stroke="url(#clay)" stroke-width="42" stroke-linecap="round" />
+  <path d="M498 592h198" stroke="url(#clay)" stroke-width="42" stroke-linecap="round" />
+</svg>

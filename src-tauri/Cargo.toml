@@ -1,0 +1,38 @@
+[package]
+name = "wxmp-cracker"
+version = "0.1.0"
+description = "微探：微信公众号内容采集与洞察工作台，Powered by Lovstudio"
+authors = ["lovstudio"]
+edition = "2021"
+
+[lib]
+name = "wxmp_cracker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+log = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tauri-plugin-log = "2"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = "0.13"
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["time"] }
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
