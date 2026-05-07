@@ -2,35 +2,87 @@ name: Release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      tag:
+        description: "Tag to release, for example v0.1.0"
+        required: true
+
+permissions:
+  contents: write
 
 jobs:
-  publish-tauri:
-    permissions:
-      contents: write
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${{ steps.tag.outputs.tag }}"
+          VERSION_NUM="${VERSION#v}"
+          NOTES=""
+          if [ -f CHANGELOG.md ]; then
+            NOTES=$(awk -v ver="$VERSION_NUM" '
+              /^## / { if (found) exit; if ($2 == ver) { found=1; next } }
+              found { print }
+            ' CHANGELOG.md)
+          fi
+          if [ -z "$NOTES" ]; then NOTES="Release $VERSION"; fi
+          MACOS_NOTE="
+
+---
+
+macOS users: this app is not signed yet. If macOS blocks the first launch, run:
+\`\`\`bash
+sudo xattr -dr com.apple.quarantine /Applications/微探.app
+\`\`\`"
+          echo 'notes<<EOF' >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "$MACOS_NOTE" >> "$GITHUB_OUTPUT"
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          draft: true
+          body: ${{ steps.notes.outputs.notes }}
+
+  build-tauri:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: "Windows"
-            platform: "windows-latest"
+          - name: Windows
+            platform: windows-latest
             args: ""
-          - name: "macOS Apple Silicon"
-            platform: "macos-latest"
+          - name: macOS Apple Silicon
+            platform: macos-latest
             args: "--target aarch64-apple-darwin"
-          - name: "macOS Intel"
-            platform: "macos-latest"
+          - name: macOS Intel
+            platform: macos-latest
             args: "--target x86_64-apple-darwin"
-          - name: "Linux"
-            platform: "ubuntu-22.04"
+          - name: Linux
+            platform: ubuntu-22.04
             args: ""
     runs-on: ${{ matrix.platform }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,12 +90,14 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -52,33 +106,26 @@ jobs:
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Build and publish
-        id: tauri
-        uses: tauri-apps/tauri-action@action-v0.6.2
+      - name: Build and upload app bundles
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WXMP_ACTIVATION_SECRET: ${{ secrets.WXMP_ACTIVATION_SECRET }}
         with:
-          tagName: v__VERSION__
-          releaseName: v__VERSION__
-          releaseBody: See the assets to download this version.
-          releaseDraft: true
-          prerelease: false
-          generateReleaseNotes: true
-          retryAttempts: 2
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
-          assetNamePattern: "[name]-[version]-[platform]-[arch][ext]"
           includeUpdaterJson: false
 
-      - name: Release summary
-        if: steps.tauri.outputs.releaseHtmlUrl != ''
+  publish-release:
+    needs: [create-release, build-tauri]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          {
-            echo "## Tauri Release"
-            echo ""
-            echo "- Platform: \`${{ matrix.name }}\`"
-            echo "- Version: \`${{ steps.tauri.outputs.appVersion }}\`"
-            echo "- Release: ${{ steps.tauri.outputs.releaseHtmlUrl }}"
-            echo "- Artifacts: \`${{ steps.tauri.outputs.artifactPaths }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          gh release edit "${{ needs.create-release.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

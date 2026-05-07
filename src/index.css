@@ -775,6 +775,11 @@ input {
   outline: none;
 }
 
+.article-context-group {
+  display: flex;
+  flex-direction: column;
+}
+
 .article-context-item svg {
   color: color-mix(in oklch, var(--primary) 74%, var(--muted-foreground));
 }

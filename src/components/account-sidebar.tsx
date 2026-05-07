@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react"
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react"
 import {
   DndContext,
   KeyboardSensor,
@@ -42,7 +49,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
@@ -87,6 +93,20 @@ interface AccountMenuState {
   pinned: boolean
   x: number
   y: number
+}
+
+interface AccountContextMenuAction {
+  key: string
+  label: string
+  icon: ReactNode
+  action: () => unknown | Promise<unknown>
+  destructive?: boolean
+}
+
+interface AccountContextMenuGroup {
+  key: string
+  ariaLabel: string
+  items: AccountContextMenuAction[]
 }
 
 export function AccountSidebar({
@@ -541,7 +561,7 @@ function SortableAccountItem({
           )
         }}
         aria-haspopup="menu"
-        className="account-row h-auto rounded-lg py-3 pr-12 pl-9 text-sidebar-foreground hover:bg-sidebar-accent/70"
+        className="account-row h-auto rounded-lg py-3 pr-3 pl-9 text-sidebar-foreground hover:bg-sidebar-accent/70"
       >
         <Avatar src={account.avatar} fallback={account.nickname[0] ?? "?"} />
         <div className="flex-1 overflow-hidden">
@@ -549,15 +569,12 @@ function SortableAccountItem({
             <div className="min-w-0 flex-1 truncate text-[13px] font-semibold">
               {account.nickname}
             </div>
-            {isPinned && (
-              <PinIcon className="size-3 shrink-0 text-sidebar-primary" />
-            )}
           </div>
           <div className="mt-0.5 truncate text-[11px] text-sidebar-foreground/48">
             {account.signature || account.alias || "无签名"}
           </div>
         </div>
-        <span className="mr-2 ml-2 rounded-sm border border-sidebar-border/50 bg-sidebar/45 px-1.5 py-0.5 font-mono text-[10px] text-sidebar-foreground/58 tabular-nums">
+        <span className="account-row-trailing ml-auto flex h-7 w-10 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-sidebar-border/50 bg-sidebar/45 font-mono text-[10px] text-sidebar-foreground/58 tabular-nums transition-opacity group-focus-within/menu-item:opacity-0 group-hover/menu-item:opacity-0">
           {account.article_count.toLocaleString()}
         </span>
       </SidebarMenuButton>
@@ -594,15 +611,14 @@ function AccountActionMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <SidebarMenuAction
+        <button
           type="button"
-          showOnHover
           aria-label={`${account.nickname} 操作`}
           title="账号操作"
-          className="top-1/2 right-2 z-10 size-7 -translate-y-1/2 bg-sidebar/65 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          className="pointer-events-none absolute top-1/2 right-3 z-10 flex h-7 w-10 -translate-y-1/2 items-center justify-center rounded-sm border border-sidebar-border/50 bg-sidebar/45 p-0 text-sidebar-foreground/70 opacity-0 outline-hidden transition-opacity group-focus-within/menu-item:pointer-events-auto group-focus-within/menu-item:opacity-100 group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-expanded:pointer-events-auto aria-expanded:opacity-100 [&>svg]:size-3.5 [&>svg]:shrink-0"
         >
           <MoreHorizontalIcon className="size-3.5" />
-        </SidebarMenuAction>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuLabel className="truncate">
@@ -694,21 +710,20 @@ function ArchivedAccountItem({
             {account.signature || account.alias || "无签名"}
           </div>
         </div>
-        <span className="mr-2 ml-2 rounded-sm border border-sidebar-border/40 bg-sidebar/35 px-1.5 py-0.5 font-mono text-[10px] text-sidebar-foreground/42 tabular-nums">
+        <span className="account-row-trailing ml-auto flex h-7 w-10 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-sidebar-border/40 bg-sidebar/35 font-mono text-[10px] text-sidebar-foreground/42 tabular-nums transition-opacity group-focus-within/menu-item:opacity-0 group-hover/menu-item:opacity-0">
           {account.article_count.toLocaleString()}
         </span>
       </SidebarMenuButton>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <SidebarMenuAction
+          <button
             type="button"
-            showOnHover
             aria-label={`${account.nickname} 归档操作`}
             title="归档操作"
-            className="top-1/2 right-2 z-10 size-7 -translate-y-1/2 bg-sidebar/65 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            className="pointer-events-none absolute top-1/2 right-3 z-10 flex h-7 w-10 -translate-y-1/2 items-center justify-center rounded-sm border border-sidebar-border/40 bg-sidebar/35 p-0 text-sidebar-foreground/70 opacity-0 outline-hidden transition-opacity group-focus-within/menu-item:pointer-events-auto group-focus-within/menu-item:opacity-100 group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-expanded:pointer-events-auto aria-expanded:opacity-100 [&>svg]:size-3.5 [&>svg]:shrink-0"
           >
             <MoreHorizontalIcon className="size-3.5" />
-          </SidebarMenuAction>
+          </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuLabel className="truncate">
@@ -755,6 +770,95 @@ function AccountContextMenu({
     onClose()
     void action()
   }
+  const groups: AccountContextMenuGroup[] = archived
+    ? [
+        {
+          key: "archive",
+          ariaLabel: "归档操作",
+          items: [
+            {
+              key: "restore",
+              label: "取消归档",
+              icon: <RotateCcwIcon className="size-3.5" />,
+              action: () => onRestore(account.fakeid),
+            },
+            {
+              key: "copy-fakeid",
+              label: "复制 FakeID",
+              icon: <CopyIcon className="size-3.5" />,
+              action: () => copyText(account.fakeid),
+            },
+          ],
+        },
+      ]
+    : [
+        {
+          key: "primary",
+          ariaLabel: "主要操作",
+          items: [
+            {
+              key: "select",
+              label: "选中公众号",
+              icon: <CheckCircle2Icon className="size-3.5" />,
+              action: () => onSelect(account.fakeid),
+            },
+            {
+              key: "pin",
+              label: pinned ? "取消固定" : "固定",
+              icon: pinned ? (
+                <PinOffIcon className="size-3.5" />
+              ) : (
+                <PinIcon className="size-3.5" />
+              ),
+              action: () =>
+                pinned ? onUnpin(account.fakeid) : onPin(account.fakeid),
+            },
+          ],
+        },
+        {
+          key: "order",
+          ariaLabel: "排序操作",
+          items: [
+            {
+              key: "move-to-top",
+              label: "置顶",
+              icon: <ArrowUpToLineIcon className="size-3.5" />,
+              action: () => onMoveToTop(account.fakeid),
+            },
+            {
+              key: "move-to-bottom",
+              label: "置底",
+              icon: <ArrowDownToLineIcon className="size-3.5" />,
+              action: () => onMoveToBottom(account.fakeid),
+            },
+          ],
+        },
+        {
+          key: "copy",
+          ariaLabel: "复制操作",
+          items: [
+            {
+              key: "copy-fakeid",
+              label: "复制 FakeID",
+              icon: <CopyIcon className="size-3.5" />,
+              action: () => copyText(account.fakeid),
+            },
+          ],
+        },
+        {
+          key: "danger",
+          ariaLabel: "危险操作",
+          items: [
+            {
+              key: "archive",
+              label: "归档",
+              icon: <ArchiveIcon className="size-3.5" />,
+              action: () => onArchive(account.fakeid),
+              destructive: true,
+            },
+          ],
+        },
+      ]
 
   return createPortal(
     <div
@@ -766,94 +870,35 @@ function AccountContextMenu({
       onMouseDown={(event) => event.stopPropagation()}
     >
       <div className="article-context-title">{account.nickname}</div>
-      {archived ? (
-        <>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => onRestore(account.fakeid))}
+      {groups.map((group, groupIndex) => (
+        <Fragment key={group.key}>
+          {groupIndex > 0 && (
+            <div role="separator" className="article-context-separator" />
+          )}
+          <div
+            role="group"
+            aria-label={group.ariaLabel}
+            className="article-context-group"
           >
-            <RotateCcwIcon className="size-3.5" />
-            取消归档
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => copyText(account.fakeid))}
-          >
-            <CopyIcon className="size-3.5" />
-            复制 FakeID
-          </button>
-        </>
-      ) : (
-        <>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => onSelect(account.fakeid))}
-          >
-            <CheckCircle2Icon className="size-3.5" />
-            选中公众号
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() =>
-              run(() =>
-                pinned ? onUnpin(account.fakeid) : onPin(account.fakeid)
-              )
-            }
-          >
-            {pinned ? (
-              <PinOffIcon className="size-3.5" />
-            ) : (
-              <PinIcon className="size-3.5" />
-            )}
-            {pinned ? "取消固定" : "固定"}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => onMoveToTop(account.fakeid))}
-          >
-            <ArrowUpToLineIcon className="size-3.5" />
-            置顶
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => onMoveToBottom(account.fakeid))}
-          >
-            <ArrowDownToLineIcon className="size-3.5" />
-            置底
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item"
-            onClick={() => run(() => copyText(account.fakeid))}
-          >
-            <CopyIcon className="size-3.5" />
-            复制 FakeID
-          </button>
-          <div className="article-context-separator" />
-          <button
-            type="button"
-            role="menuitem"
-            className="article-context-item account-context-item-destructive"
-            onClick={() => run(() => onArchive(account.fakeid))}
-          >
-            <ArchiveIcon className="size-3.5" />
-            归档
-          </button>
-        </>
-      )}
+            {group.items.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitem"
+                className={
+                  item.destructive
+                    ? "article-context-item account-context-item-destructive"
+                    : "article-context-item"
+                }
+                onClick={() => run(item.action)}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </Fragment>
+      ))}
     </div>,
     document.body
   )
@@ -867,7 +912,7 @@ function createAccountMenuState(
   clientY: number
 ): AccountMenuState {
   const width = 190
-  const height = archived ? 104 : 254
+  const height = getAccountContextMenuEstimatedHeight(archived)
   const padding = 8
   const x = Math.min(clientX, window.innerWidth - width - padding)
   const y = Math.min(clientY, window.innerHeight - height - padding)
@@ -879,6 +924,22 @@ function createAccountMenuState(
     x: Math.max(padding, x),
     y: Math.max(padding, y),
   }
+}
+
+function getAccountContextMenuEstimatedHeight(archived: boolean) {
+  const itemCount = archived ? 2 : 6
+  const groupCount = archived ? 1 : 4
+  const verticalPadding = 12
+  const titleHeight = 44
+  const itemHeight = 30
+  const separatorHeight = 11
+
+  return (
+    verticalPadding +
+    titleHeight +
+    itemCount * itemHeight +
+    (groupCount - 1) * separatorHeight
+  )
 }
 
 function formatLastLogin(lastLoginAt: number | null): string {

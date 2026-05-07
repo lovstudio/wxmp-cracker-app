@@ -2,12 +2,23 @@
 
 Powered by Lovstudio。
 
+Latest: `v0.1.0`
+
 微探是一款跨端桌面 App：用三栏工作台采集、浏览并分析 [wcx](https://github.com/lovstudio/wcx) 抓回来的微信公众号文章。登录扫码在 app 内嵌的 WebviewWindow 里完成，不依赖外部 Chrome。
 
 - 侧边栏：所有缓存的公众号（来自 `~/Library/Application Support/wcx/cache.db`）
 - 中间列：选中公众号的文章列表
 - 主区：文章正文（HTML 渲染或 markdown）
 - 顶部：登录态徽章 + "扫码登录 / 更新凭证" 按钮
+
+## Release Highlights
+
+### v0.1.0
+
+- 首个 Tauri 桌面版本，支持读取本机 `wcx` 缓存并查看公众号文章。
+- 新增公众号搜索、采集、续采和抓取进度展示。
+- 新增账号工作区，包含采集管理、基本信息、趋势分析和文风分析。
+- 新增账号绑定的试用/正式激活码流程。
 
 ## 前置
 

@@ -5,6 +5,7 @@ use tauri_plugin_opener::OpenerExt;
 mod auth;
 mod commands;
 mod db;
+mod license;
 
 const LOGIN_WINDOW_LABEL: &str = "wxmp-login";
 
@@ -86,11 +87,15 @@ pub fn run() {
             greet,
             commands::auth_status,
             commands::open_login,
+            commands::license_status,
+            commands::activate_license,
             commands::list_accounts,
             commands::list_articles,
             commands::get_article,
             commands::cache_db_path,
+            commands::search_accounts,
             commands::fetch_account,
+            commands::fetch_selected_account,
             commands::fetch_article_content,
         ])
         .setup(|app| {

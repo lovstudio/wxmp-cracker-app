@@ -5,14 +5,19 @@ import { ArticleList } from "@/components/article-list"
 import { ArticleDetail as ArticleDetailView } from "@/components/article-detail"
 import { TopBar, type WorkspaceTabId } from "@/components/top-bar"
 import { AddAccountDialog } from "@/components/add-account-dialog"
+import { LicenseGate } from "@/components/license-gate"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import {
   api,
+  onFetchAccountProgress,
   onLoginError,
   onLoginSuccess,
   type Account,
+  type AccountSearchResult,
+  type FetchAccountProgress,
+  type LicenseStatus,
   type LoginAccount,
 } from "@/lib/api"
 import { isTauri } from "@/lib/tauri"
@@ -21,8 +26,24 @@ import { copyableToast as toast } from "@/lib/toast"
 const ACCOUNT_ORDER_STORAGE_KEY = "wxmp.accountOrder"
 const ARCHIVED_ACCOUNTS_STORAGE_KEY = "wxmp.archivedAccounts"
 const PINNED_ACCOUNTS_STORAGE_KEY = "wxmp.pinnedAccounts"
+const MAX_FETCH_PROGRESS_EVENTS = 36
 
 export default function App() {
+  return (
+    <TooltipProvider>
+      <WorkspaceApp />
+      <Toaster />
+    </TooltipProvider>
+  )
+}
+
+type PendingFetch = {
+  account: AccountSearchResult
+  limit: number
+  withContent: boolean
+}
+
+function WorkspaceApp() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [accountOrder, setAccountOrder] = useState<string[]>(() =>
     readStringList(ACCOUNT_ORDER_STORAGE_KEY)
@@ -40,6 +61,12 @@ export default function App() {
   const [lastLoginAt, setLastLoginAt] = useState<number | null>(null)
   const [addAccountOpen, setAddAccountOpen] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
+  const [licenseOpen, setLicenseOpen] = useState(false)
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null)
+  const [pendingFetch, setPendingFetch] = useState<PendingFetch | null>(null)
+  const [fetchProgressEvents, setFetchProgressEvents] = useState<
+    FetchAccountProgress[]
+  >([])
   const [articleRefreshKey, setArticleRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("reader")
   const orderedAccounts = orderAccounts(accounts, accountOrder)
@@ -87,19 +114,47 @@ export default function App() {
     }
   }
 
+  const refreshLicenseStatus = async () => {
+    if (!isTauri()) {
+      setLicenseStatus(browserPreviewLicenseStatus())
+      return browserPreviewLicenseStatus()
+    }
+
+    try {
+      const status = await api.licenseStatus()
+      setLicenseStatus(status)
+      return status
+    } catch (error) {
+      const status = licenseErrorStatus(errorMessage(error))
+      setLicenseStatus(status)
+      return status
+    }
+  }
+
   useEffect(() => {
-    refreshAccounts()
-    refreshAuth()
+    const initialRefreshTimer = window.setTimeout(() => {
+      void refreshAccounts()
+      void refreshAuth()
+      void refreshLicenseStatus()
+    }, 0)
     const ok = onLoginSuccess(() => {
       toast.success("登录成功，已保存凭证")
       refreshAuth()
+      refreshLicenseStatus()
     })
     const err = onLoginError((m) => {
       toast.error(`登录失败: ${m}`)
     })
+    const progress = onFetchAccountProgress((event) => {
+      setFetchProgressEvents((currentEvents) =>
+        [...currentEvents, event].slice(-MAX_FETCH_PROGRESS_EVENTS)
+      )
+    })
     return () => {
+      window.clearTimeout(initialRefreshTimer)
       ok.then((un) => un())
       err.then((un) => un())
+      progress.then((un) => un())
     }
   }, [])
 
@@ -120,41 +175,92 @@ export default function App() {
       toast.error("请先扫码登录")
       return
     }
+    setFetchProgressEvents([])
     setAddAccountOpen(true)
   }
 
   const addAccount = async (
-    query: string,
+    account: AccountSearchResult,
+    limit: number,
+    withContent: boolean
+  ) => {
+    if (needsLicenseForFetch(accounts, account)) {
+      const allowed = await hasActiveLicense()
+      if (!allowed) {
+        setPendingFetch({ account, limit, withContent })
+        setLicenseOpen(true)
+        return
+      }
+    }
+
+    await fetchSelectedAccount(account, limit, withContent)
+  }
+
+  const hasActiveLicense = async () => {
+    const status = await refreshLicenseStatus()
+    return status.active
+  }
+
+  const fetchSelectedAccount = async (
+    account: AccountSearchResult,
     limit: number,
     withContent: boolean
   ) => {
     setAddingAccount(true)
+    setFetchProgressEvents([initialFetchProgress(account, limit, withContent)])
     try {
-      await api.fetchAccount(query, limit, withContent)
+      await api.fetchSelectedAccount(account, limit, withContent)
       const list = await api.listAccounts()
       setAccounts(list)
 
-      const needle = query.trim().toLowerCase()
-      const added = list.find((account) => {
-        return (
-          account.fakeid.toLowerCase() === needle ||
-          account.nickname.toLowerCase() === needle ||
-          (account.alias ?? "").toLowerCase() === needle ||
-          account.nickname.toLowerCase().includes(needle)
-        )
-      })
+      const added = list.find((item) => item.fakeid === account.fakeid)
 
       if (added) {
+        setAccountOrder((currentOrder) =>
+          moveAccountOrderItemToFront(currentOrder, list, added.fakeid)
+        )
         setActiveFakeid(added.fakeid)
         setActiveAid(null)
       }
 
-      toast.success("已新增公众号")
+      toast.success(`已新增 ${added?.nickname ?? account.nickname}`)
       setAddAccountOpen(false)
+      setFetchProgressEvents([])
     } catch (e) {
-      toast.error(errorMessage(e))
+      const message = errorMessage(e)
+      setFetchProgressEvents((currentEvents) =>
+        [
+          ...currentEvents,
+          {
+            fakeid: account.fakeid,
+            nickname: account.nickname,
+            stage: "error",
+            status: "error",
+            message,
+            current: null,
+            total: null,
+            title: null,
+          },
+        ].slice(-MAX_FETCH_PROGRESS_EVENTS)
+      )
+      toast.error(message)
     } finally {
       setAddingAccount(false)
+    }
+  }
+
+  const continuePendingFetch = (status: LicenseStatus) => {
+    setLicenseStatus(status)
+    const nextFetch = pendingFetch
+    setPendingFetch(null)
+    setLicenseOpen(false)
+
+    if (nextFetch) {
+      void fetchSelectedAccount(
+        nextFetch.account,
+        nextFetch.limit,
+        nextFetch.withContent
+      )
     }
   }
 
@@ -247,7 +353,7 @@ export default function App() {
   }
 
   return (
-    <TooltipProvider>
+    <>
       <div className="app-shell">
         <SidebarProvider
           className="h-full min-h-0 overflow-hidden"
@@ -330,11 +436,51 @@ export default function App() {
       <AddAccountDialog
         open={addAccountOpen}
         busy={addingAccount}
-        onOpenChange={setAddAccountOpen}
+        progressEvents={fetchProgressEvents}
+        onOpenChange={(open) => {
+          setAddAccountOpen(open)
+          if (!open) setFetchProgressEvents([])
+        }}
+        onSearch={api.searchAccounts}
         onSubmit={addAccount}
       />
-      <Toaster />
-    </TooltipProvider>
+      {licenseStatus && !licenseStatus.active ? (
+        <ActivationWatermark
+          message={licenseStatus.message}
+          onActivate={() => setLicenseOpen(true)}
+        />
+      ) : null}
+      <LicenseGate
+        open={licenseOpen}
+        onActivated={continuePendingFetch}
+        onOpenChange={(open) => {
+          setLicenseOpen(open)
+          if (!open) setPendingFetch(null)
+        }}
+      />
+    </>
+  )
+}
+
+function ActivationWatermark({
+  message,
+  onActivate,
+}: {
+  message: string
+  onActivate: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="fixed right-6 bottom-5 z-30 max-w-[280px] text-right text-foreground/45 transition-colors hover:text-foreground/75 focus-visible:text-foreground focus-visible:outline-none"
+      title={message}
+      onClick={onActivate}
+    >
+      <span className="block font-heading text-2xl leading-none font-semibold">
+        微探未激活
+      </span>
+      <span className="mt-1 block text-sm">立即激活</span>
+    </button>
   )
 }
 
@@ -343,6 +489,63 @@ function errorMessage(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function initialFetchProgress(
+  account: AccountSearchResult,
+  limit: number,
+  withContent: boolean
+): FetchAccountProgress {
+  return {
+    fakeid: account.fakeid,
+    nickname: account.nickname,
+    stage: "prepare",
+    status: "running",
+    message: withContent
+      ? `准备抓取 ${limit} 篇文章索引，并同步正文`
+      : `准备抓取 ${limit} 篇文章索引`,
+    current: 0,
+    total: limit,
+    title: null,
+  }
+}
+
+function needsLicenseForFetch(
+  accounts: Account[],
+  account: AccountSearchResult
+) {
+  const alreadyTracked = accounts.some((item) => item.fakeid === account.fakeid)
+  return !alreadyTracked && accounts.length >= 1
+}
+
+function browserPreviewLicenseStatus(): LicenseStatus {
+  return {
+    active: true,
+    kind: "official",
+    activated_at: null,
+    expires_at: null,
+    days_remaining: null,
+    customer: "Dev",
+    license_id: "browser",
+    account_id: "browser",
+    current_account_id: "browser",
+    message: "浏览器预览模式已跳过本机授权校验。",
+  }
+}
+
+function licenseErrorStatus(message: string): LicenseStatus {
+  return {
+    active: false,
+    kind: null,
+    activated_at: null,
+    expires_at: null,
+    days_remaining: null,
+    customer: null,
+    license_id: null,
+    account_id: null,
+    current_account_id: null,
+    message,
+  }
 }
 
 function readStringList(key: string): string[] {
@@ -394,6 +597,19 @@ function mergeAccountOrder(order: string[], accounts: Account[]): string[] {
     .filter((fakeid) => !orderedKnownIdSet.has(fakeid))
 
   return [...orderedKnownIds, ...newIds]
+}
+
+function moveAccountOrderItemToFront(
+  order: string[],
+  accounts: Account[],
+  fakeid: string
+): string[] {
+  const nextOrder = mergeAccountOrder(order, accounts)
+  const oldIndex = nextOrder.indexOf(fakeid)
+
+  if (oldIndex <= 0) return nextOrder
+
+  return moveStringItem(nextOrder, oldIndex, 0)
 }
 
 function moveStringItem(items: string[], oldIndex: number, newIndex: number) {

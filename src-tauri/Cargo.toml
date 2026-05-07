@@ -26,6 +26,9 @@ dirs = "5"
 anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["time"] }
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
 
 [profile.dev]
 incremental = true
