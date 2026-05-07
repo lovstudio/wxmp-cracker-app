@@ -40,15 +40,14 @@ jobs:
           if [ -z "$NOTES" ]; then NOTES="Release $VERSION"; fi
           {
             echo 'notes<<EOF'
-            echo "$NOTES"
-            cat <<'MACOS_NOTE'
----
-
-macOS users: this app is not signed yet. If macOS blocks the first launch, run:
-```bash
-sudo xattr -dr com.apple.quarantine /Applications/微探.app
-```
-MACOS_NOTE
+            printf '%s\n' "$NOTES"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
+            printf '%s\n' "macOS users: this app is not signed yet. If macOS blocks the first launch, run:"
+            printf '%s\n' '```bash'
+            printf '%s\n' "sudo xattr -dr com.apple.quarantine /Applications/微探.app"
+            printf '%s\n' '```'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
