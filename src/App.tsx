@@ -12,6 +12,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { AuthProvider, useAuth } from "@/hooks/useAuth"
+import { useWxmpGatewayWorker } from "@/hooks/useWxmpGatewayWorker"
 import {
   api,
   onFetchAccountProgress,
@@ -96,10 +97,6 @@ function WorkspaceApp() {
     activeAccounts.some((account) => account.fakeid === activeFakeid)
       ? activeFakeid
       : (activeAccounts[0]?.fakeid ?? null)
-  const totalArticles = activeAccounts.reduce(
-    (total, account) => total + account.article_count,
-    0
-  )
   const activeAccount =
     activeAccounts.find((account) => account.fakeid === selectedFakeid) ?? null
   const lovstudioAccountId = user?.id ?? null
@@ -161,6 +158,16 @@ function WorkspaceApp() {
       return status
     }
   }, [lovstudioAccountId])
+
+  const refreshAfterGatewayRequest = useCallback(async () => {
+    await refreshAccounts()
+    setArticleRefreshKey((key) => key + 1)
+  }, [refreshAccounts])
+
+  useWxmpGatewayWorker({
+    enabled: Boolean(user && loggedIn),
+    onRequestFinished: refreshAfterGatewayRequest,
+  })
 
   useEffect(() => {
     const initialRefreshTimer = window.setTimeout(() => {
@@ -442,13 +449,20 @@ function WorkspaceApp() {
           />
           <SidebarInset className="app-main h-full min-h-0 overflow-hidden">
             <TopBar
-              accountCount={activeAccounts.length}
-              articleCount={totalArticles}
               activeTab={activeTab}
               onOpenLicenseAdmin={() => setLicenseAdminOpen(true)}
               onTabChange={setActiveTab}
             />
-            <div className="workspace-grid flex min-h-0 flex-1 overflow-hidden">
+            <div
+              className="workspace-grid flex min-h-0 flex-1 overflow-hidden"
+              data-reader-view={
+                activeTab === "reader"
+                  ? activeAid
+                    ? "detail"
+                    : "list"
+                  : undefined
+              }
+            >
               {activeTab === "reader" ? (
                 <>
                   <ArticleList
@@ -463,6 +477,7 @@ function WorkspaceApp() {
                   <ArticleDetailView
                     aid={activeAid}
                     refreshKey={articleRefreshKey}
+                    onBackToList={() => setActiveAid(null)}
                     onContentFetched={() => {
                       setArticleRefreshKey((key) => key + 1)
                     }}

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2 - 2026-05-08
+
+### Added
+
+- Added resource quota and gateway status panels for hourly allowance, provider health, execution pool, queue, and alerts.
+- Added WeChat capability settings for self-use preference and commercial support authorization.
+- Added Supabase gateway request, provider lease, execution report, health, and alert schema support.
+- Added an in-app gateway worker that can claim and complete queued WeChat account fetch requests.
+
+### Changed
+
+- Routed article content fetches through provider execution reporting so quota and health metrics stay current.
+- Removed compiled fallback Supabase project credentials from the Tauri backend and load publishable frontend settings at build time.
+- Improved mobile reader navigation with a dedicated article-list/detail layout and back action.
+- Updated the app version to `0.1.2` across package and Tauri metadata.
+
 ## 0.1.1 - 2026-05-08
 
 ### Added

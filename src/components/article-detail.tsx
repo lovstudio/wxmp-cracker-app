@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import {
+  ArrowLeftIcon,
   BookOpenTextIcon,
   CalendarClockIcon,
   CheckCircle2Icon,
@@ -13,18 +14,21 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { api, type ArticleDetail as Detail } from "@/lib/api"
+import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyableToast as toast } from "@/lib/toast"
 
 interface Props {
   aid: string | null
   refreshKey?: number
+  onBackToList?: () => void
   onContentFetched?: (aid: string) => void
 }
 
 export function ArticleDetail({
   aid,
   refreshKey = 0,
+  onBackToList,
   onContentFetched,
 }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null)
@@ -55,7 +59,18 @@ export function ArticleDetail({
     setFetchingContent(true)
     toast.info("正在抓取正文，可能需要一点时间")
     try {
-      const updated = await api.fetchArticleContent(detail.aid)
+      const updated = await runWithProviderExecutionReport(
+        {
+          endpoint: "fetch_article_content",
+          observedValue: {
+            aid: detail.aid,
+            fakeid: detail.fakeid,
+            force: false,
+          },
+          targetFakeid: detail.fakeid,
+        },
+        () => api.fetchArticleContent(detail.aid)
+      )
       setDetail(updated)
       onContentFetched?.(updated.aid)
       toast.success("正文已抓取并写入本地缓存")
@@ -68,7 +83,7 @@ export function ArticleDetail({
 
   if (!aid) {
     return (
-      <div className="reader-surface flex flex-1 items-center justify-center p-8">
+      <div className="article-detail-reader reader-surface flex min-h-0 flex-1 items-center justify-center p-8">
         <div className="empty-state-panel max-w-md rounded-lg px-8 py-10 text-center">
           <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-md border border-border/70 bg-muted/70 text-primary">
             <BookOpenTextIcon className="size-5" />
@@ -86,7 +101,19 @@ export function ArticleDetail({
 
   if (loading || !detail) {
     return (
-      <div className="reader-surface flex flex-1 items-center justify-center p-8">
+      <div className="article-detail-reader reader-surface relative flex min-h-0 flex-1 items-center justify-center p-8">
+        {onBackToList && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="reader-mobile-back-button"
+            onClick={onBackToList}
+          >
+            <ArrowLeftIcon className="size-3.5" />
+            返回列表
+          </Button>
+        )}
         <div className="empty-state-panel flex min-w-72 items-center gap-3 rounded-lg px-5 py-4 text-sm text-muted-foreground">
           {loading ? (
             <LoaderCircleIcon className="size-4 animate-spin text-primary" />
@@ -102,9 +129,21 @@ export function ArticleDetail({
   const cover = normalizeWechatImageUrl(detail.cover)
 
   return (
-    <main className="reader-surface flex min-w-0 flex-1 flex-col overflow-hidden">
+    <main className="article-detail-reader reader-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="reader-header">
         <div className="reader-header-inner">
+          {onBackToList && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="reader-mobile-back-button"
+              onClick={onBackToList}
+            >
+              <ArrowLeftIcon className="size-3.5" />
+              返回列表
+            </Button>
+          )}
           <div className="reader-title-row">
             <div className="min-w-0 flex-1">
               <h2 className="reader-title">{detail.title}</h2>
@@ -165,7 +204,7 @@ export function ArticleDetail({
           </div>
         </div>
       </div>
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="reader-paper">
           <ArticleBody
             detail={detail}

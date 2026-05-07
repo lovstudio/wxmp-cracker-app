@@ -30,7 +30,9 @@ import {
   ArrowUpToLineIcon,
   CheckCircle2Icon,
   CopyIcon,
+  GaugeIcon,
   GripVerticalIcon,
+  HandshakeIcon,
   KeyRoundIcon,
   LogOutIcon,
   MoreHorizontalIcon,
@@ -64,6 +66,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import {
+  WechatCapabilityStatusFeedback,
+  WechatCapabilitySettingsProvider,
+  WechatCommercialAuthorizationSetting,
+  WechatCommercialSupportPanel,
+  WechatSelfCapabilityPreferenceControl,
+} from "@/components/wechat-capability-settings"
+import { QuotaSettingsPanel } from "@/components/quota-settings-panel"
 import type { Account, LoginAccount } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText } from "@/lib/toast"
@@ -95,7 +105,7 @@ interface Props {
   onMoveToBottom: (fakeid: string) => void
 }
 
-type SettingsPane = "account" | "connections"
+type SettingsPane = "account" | "connections" | "commercial" | "quota"
 
 interface AccountMenuState {
   account: Account
@@ -429,6 +439,14 @@ export function AccountSidebar({
               <Settings2Icon className="size-3.5" />
               连接配置
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openSettings("commercial")}>
+              <HandshakeIcon className="size-3.5" />
+              公众号商业化
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openSettings("quota")}>
+              <GaugeIcon className="size-3.5" />
+              频率额度
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
@@ -533,7 +551,7 @@ function AppSettingsWindow({
         }
       }}
     >
-      <div className="grid h-[min(680px,calc(100dvh-48px))] w-[min(880px,calc(100vw-48px))] overflow-hidden rounded-xl border border-border bg-card shadow-2xl md:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid h-[min(680px,calc(100dvh-48px))] min-h-0 w-[min(880px,calc(100vw-48px))] overflow-hidden rounded-xl border border-border bg-card shadow-2xl md:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="hidden border-r border-border bg-muted/45 p-3 md:block">
           <div className="mb-5 flex items-center gap-2 px-1">
             <span className="size-3 rounded-full bg-red-500/80" />
@@ -553,16 +571,28 @@ function AppSettingsWindow({
               label="连接"
               onClick={() => setActivePane("connections")}
             />
+            <SettingsNavButton
+              active={activePane === "commercial"}
+              icon={<HandshakeIcon className="size-4" />}
+              label="商业化"
+              onClick={() => setActivePane("commercial")}
+            />
+            <SettingsNavButton
+              active={activePane === "quota"}
+              icon={<GaugeIcon className="size-4" />}
+              label="频率"
+              onClick={() => setActivePane("quota")}
+            />
           </div>
         </aside>
-        <section className="flex min-w-0 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-col">
           <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
-            <div className="min-w-0 flex-1">
+            <div className="hidden min-w-0 flex-1 md:block">
               <div className="truncate text-base font-semibold">
-                {activePane === "account" ? "账号" : "连接"}
+                {settingsPaneTitle(activePane)}
               </div>
             </div>
-            <div className="flex gap-1 md:hidden">
+            <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto md:hidden">
               <Button
                 type="button"
                 size="sm"
@@ -579,6 +609,22 @@ function AppSettingsWindow({
               >
                 连接
               </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={activePane === "commercial" ? "secondary" : "ghost"}
+                onClick={() => setActivePane("commercial")}
+              >
+                商业化
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={activePane === "quota" ? "secondary" : "ghost"}
+                onClick={() => setActivePane("quota")}
+              >
+                频率
+              </Button>
             </div>
             <Button
               type="button"
@@ -590,167 +636,181 @@ function AppSettingsWindow({
               <XIcon className="size-4" />
             </Button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-5">
-            {activePane === "account" ? (
-              <div className="grid gap-4">
-                <section className="rounded-xl border border-border bg-background/80 p-4">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {lovstudioLoggedIn ? (
-                      <Avatar
-                        src={lovstudioAvatarUrl}
-                        fallback={lovstudioFallback}
-                        shape="circle"
-                      />
-                    ) : (
-                      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                        <UserRoundIcon className="size-4" />
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-semibold">
-                        {lovstudioLoggedIn ? lovstudioName : "Lovstudio"}
-                      </div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {lovstudioLoggedIn
-                          ? lovstudioEmail || "已绑定 Lovstudio 账号"
-                          : "未登录"}
-                      </div>
-                    </div>
-                    <span
-                      className="auth-status-badge shrink-0"
-                      data-state={lovstudioLoggedIn ? "online" : "offline"}
-                    >
-                      {lovstudioLoggedIn ? "已登录" : "未登录"}
-                    </span>
-                  </div>
-                  {lovstudioUserId ? (
-                    <button
-                      type="button"
-                      className="mt-3 flex w-full min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-left font-mono text-xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => void copyText(lovstudioUserId)}
-                    >
-                      <CopyIcon className="size-3.5 shrink-0" />
-                      <span className="truncate">{lovstudioUserId}</span>
-                    </button>
-                  ) : null}
-                  {!lovstudioLoggedIn ? (
-                    <div className="mt-4 flex justify-end">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={openLovstudioLogin}
-                      >
-                        <UserRoundIcon className="size-3.5" />
-                        登录 Lovstudio
-                      </Button>
-                    </div>
-                  ) : null}
-                </section>
-                {lovstudioLoggedIn ? (
-                  <section className="rounded-xl border border-destructive/20 bg-destructive/5 p-4">
-                    <div className="flex min-w-0 items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-destructive">
-                          退出 Lovstudio
+          <WechatCapabilitySettingsProvider
+            authAccount={authAccount}
+            loggedIn={loggedIn}
+          >
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              {activePane === "account" ? (
+                <div className="grid gap-4">
+                  <section className="rounded-xl border border-border bg-background/80 p-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {lovstudioLoggedIn ? (
+                        <Avatar
+                          src={lovstudioAvatarUrl}
+                          fallback={lovstudioFallback}
+                          shape="circle"
+                        />
+                      ) : (
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                          <UserRoundIcon className="size-4" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold">
+                          {lovstudioLoggedIn ? lovstudioName : "Lovstudio"}
                         </div>
                         <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                          本机将停止使用当前账号同步授权。
+                          {lovstudioLoggedIn
+                            ? lovstudioEmail || "已绑定 Lovstudio 账号"
+                            : "未登录"}
                         </div>
                       </div>
-                      {!confirmingLogout ? (
+                      <span
+                        className="auth-status-badge shrink-0"
+                        data-state={lovstudioLoggedIn ? "online" : "offline"}
+                      >
+                        {lovstudioLoggedIn ? "已登录" : "未登录"}
+                      </span>
+                    </div>
+                    {lovstudioUserId ? (
+                      <button
+                        type="button"
+                        className="mt-3 flex w-full min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-left font-mono text-xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => void copyText(lovstudioUserId)}
+                      >
+                        <CopyIcon className="size-3.5 shrink-0" />
+                        <span className="truncate">{lovstudioUserId}</span>
+                      </button>
+                    ) : null}
+                    {!lovstudioLoggedIn ? (
+                      <div className="mt-4 flex justify-end">
                         <Button
                           type="button"
-                          variant="destructive"
-                          onClick={() => setConfirmingLogout(true)}
+                          variant="outline"
+                          onClick={openLovstudioLogin}
                         >
-                          <LogOutIcon className="size-3.5" />
-                          退出登录
+                          <UserRoundIcon className="size-3.5" />
+                          登录 Lovstudio
                         </Button>
-                      ) : (
-                        <div className="flex shrink-0 gap-2">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            onClick={() => setConfirmingLogout(false)}
-                          >
-                            取消
-                          </Button>
+                      </div>
+                    ) : null}
+                  </section>
+                  {lovstudioLoggedIn ? (
+                    <section className="rounded-xl border border-destructive/20 bg-destructive/5 p-4">
+                      <div className="flex min-w-0 items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-destructive">
+                            退出 Lovstudio
+                          </div>
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            本机将停止使用当前账号同步授权。
+                          </div>
+                        </div>
+                        {!confirmingLogout ? (
                           <Button
                             type="button"
                             variant="destructive"
-                            onClick={confirmLovstudioLogout}
+                            onClick={() => setConfirmingLogout(true)}
                           >
-                            确认退出
+                            <LogOutIcon className="size-3.5" />
+                            退出登录
                           </Button>
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                ) : null}
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                <section className="rounded-xl border border-border bg-background/80 p-4">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {authAvatar ? (
-                      <Avatar src={authAvatar} fallback={authFallback} />
-                    ) : (
-                      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                        {loggedIn ? (
-                          <CheckCircle2Icon className="size-4" />
                         ) : (
-                          <AlertCircleIcon className="size-4" />
+                          <div className="flex shrink-0 gap-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={() => setConfirmingLogout(false)}
+                            >
+                              取消
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              onClick={confirmLovstudioLogout}
+                            >
+                              确认退出
+                            </Button>
+                          </div>
                         )}
                       </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="truncate text-sm font-semibold">
-                          微信公众号
-                        </div>
-                        <span
-                          className="auth-status-badge"
-                          data-state={loggedIn ? "online" : "offline"}
-                        >
-                          {authStatusLabel}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {loggedIn
-                          ? (authAccount?.nickname ?? "账号信息同步中")
-                          : "未配置"}
-                      </div>
-                    </div>
-                    <Button type="button" variant="outline" onClick={onLogin}>
-                      <KeyRoundIcon className="size-3.5" />
-                      {loggedIn ? "更新" : "配置"}
-                    </Button>
-                  </div>
-                  {loggedIn ? (
-                    <div className="mt-4 grid gap-2 rounded-lg bg-muted/55 p-3 text-xs text-muted-foreground">
-                      <SettingsInfoRow
-                        label="上次登录"
-                        value={formatLastLogin(lastLoginAt)}
-                      />
-                      {authAlias ? (
-                        <SettingsInfoRow label="别名" value={authAlias} />
-                      ) : null}
-                      {authId ? (
-                        <button
-                          type="button"
-                          className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 text-left outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                          onClick={() => void copyText(authId)}
-                        >
-                          <span>ID</span>
-                          <span className="truncate font-mono">{authId}</span>
-                        </button>
-                      ) : null}
-                    </div>
+                    </section>
                   ) : null}
-                </section>
-              </div>
-            )}
-          </div>
+                </div>
+              ) : activePane === "connections" ? (
+                <div className="grid gap-4">
+                  <section className="rounded-xl border border-border bg-background/80 p-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {authAvatar ? (
+                        <Avatar src={authAvatar} fallback={authFallback} />
+                      ) : (
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                          {loggedIn ? (
+                            <CheckCircle2Icon className="size-4" />
+                          ) : (
+                            <AlertCircleIcon className="size-4" />
+                          )}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="truncate text-sm font-semibold">
+                            微信公众号
+                          </div>
+                          <span
+                            className="auth-status-badge"
+                            data-state={loggedIn ? "online" : "offline"}
+                          >
+                            {authStatusLabel}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {loggedIn
+                            ? (authAccount?.nickname ?? "账号信息同步中")
+                            : "未配置"}
+                        </div>
+                      </div>
+                      <Button type="button" variant="outline" onClick={onLogin}>
+                        <KeyRoundIcon className="size-3.5" />
+                        {loggedIn ? "更新" : "配置"}
+                      </Button>
+                    </div>
+                    {loggedIn ? (
+                      <div className="mt-4 grid gap-2 rounded-lg bg-muted/55 p-3 text-xs text-muted-foreground">
+                        <SettingsInfoRow
+                          label="上次登录"
+                          value={formatLastLogin(lastLoginAt)}
+                        />
+                        {authAlias ? (
+                          <SettingsInfoRow label="别名" value={authAlias} />
+                        ) : null}
+                        {authId ? (
+                          <button
+                            type="button"
+                            className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 text-left outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={() => void copyText(authId)}
+                          >
+                            <span>ID</span>
+                            <span className="truncate font-mono">{authId}</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="mt-4 grid gap-3">
+                      <WechatSelfCapabilityPreferenceControl />
+                      <WechatCommercialAuthorizationSetting variant="connection" />
+                      <WechatCapabilityStatusFeedback />
+                    </div>
+                  </section>
+                </div>
+              ) : activePane === "commercial" ? (
+                <WechatCommercialSupportPanel />
+              ) : (
+                <QuotaSettingsPanel />
+              )}
+            </div>
+          </WechatCapabilitySettingsProvider>
         </section>
       </div>
     </div>,
@@ -780,6 +840,13 @@ function SettingsNavButton({
       <span className="truncate">{label}</span>
     </button>
   )
+}
+
+function settingsPaneTitle(pane: SettingsPane) {
+  if (pane === "account") return "账号"
+  if (pane === "connections") return "连接"
+  if (pane === "commercial") return "公众号商业化"
+  return "频率"
 }
 
 function SettingsInfoRow({ label, value }: { label: string; value: string }) {

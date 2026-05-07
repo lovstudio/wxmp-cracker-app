@@ -74,10 +74,10 @@ export function LicenseAdminDialog({
         <CardHeader className="relative pr-12">
           <div className="mb-1 flex items-center gap-2">
             <ShieldCheckIcon className="size-5 text-primary" />
-            <CardTitle>授权管理</CardTitle>
+            <CardTitle>授权与频率管理</CardTitle>
           </div>
           <CardDescription>
-            管理员可在软件内授权目标 Lovstudio 账号，目标用户登录后会自动激活。
+            管理员可授权目标 Lovstudio 账号，并调整接口频率参数。
           </CardDescription>
           <Button
             aria-label="关闭授权管理"
@@ -118,9 +118,9 @@ export function LicenseAdminPanel({
   const [quotaLevel, setQuotaLevel] = useState("1")
   const [customer, setCustomer] = useState("")
   const [quotaSettings, setQuotaSettings] = useState<QuotaSettings | null>(null)
-  const [accountLevelFactor, setAccountLevelFactor] = useState("50")
+  const [accountLevelFactor, setAccountLevelFactor] = useState("5")
   const [ownCapabilityFactor, setOwnCapabilityFactor] = useState("50")
-  const [defaultAccountLevel, setDefaultAccountLevel] = useState("1")
+  const [defaultAccountLevel, setDefaultAccountLevel] = useState("0")
   const [busy, setBusy] = useState(false)
   const [quotaBusy, setQuotaBusy] = useState(false)
   const [quotaLoading, setQuotaLoading] = useState(false)
@@ -189,10 +189,7 @@ export function LicenseAdminPanel({
     setNotice(null)
 
     try {
-      const normalizedQuotaLevel = parseNonNegativeInt(
-        quotaLevel,
-        "账号级别"
-      )
+      const normalizedQuotaLevel = parseNonNegativeInt(quotaLevel, "账号级别")
       const license = await upsertCloudLicense({
         accountId: targetAccountId,
         kind,
@@ -224,11 +221,11 @@ export function LicenseAdminPanel({
       const settings = await updateQuotaSettings({
         accountLevelFactor: parseNonNegativeInt(
           accountLevelFactor,
-          "账号级别系数 J"
+          "每级基础保障"
         ),
         ownCapabilityFactor: parseNonNegativeInt(
           ownCapabilityFactor,
-          "公众号能力系数 K"
+          "每个自有公众号能力加成"
         ),
         defaultAccountLevel: parseNonNegativeInt(
           defaultAccountLevel,
@@ -237,7 +234,7 @@ export function LicenseAdminPanel({
       })
       setQuotaSettings(settings)
       setNotice(
-        `频率参数已更新：每小时额度 = 账号级别 × ${settings.account_level_factor} + 自带公众号能力 × ${settings.own_capability_factor}。`
+        `额度模型已更新：每级基础保障 ${settings.account_level_factor} 次/小时，每个自有公众号能力加成 ${settings.own_capability_factor} 次/小时。`
       )
       toast.success("频率参数已更新")
     } catch (caughtError) {
@@ -385,10 +382,7 @@ export function LicenseAdminPanel({
             value={customer}
           />
         </div>
-        <Button
-          disabled={busy || !targetAccountId.trim()}
-          type="submit"
-        >
+        <Button disabled={busy || !targetAccountId.trim()} type="submit">
           {busy ? (
             <Loader2Icon className="size-4 animate-spin" />
           ) : (
@@ -404,14 +398,14 @@ export function LicenseAdminPanel({
         onSubmit={submitQuotaSettings}
       >
         <div>
-          <div className="text-sm font-medium">频率参数</div>
+          <div className="text-sm font-medium">额度模型</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            每小时额度 = 账号级别 × J + 自带公众号能力 × K
+            平台共享池保守分配基础保障，自有公众号能力独立计入加成。
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="grid gap-2">
-            <Label htmlFor="quota-default-level">默认级别</Label>
+            <Label htmlFor="quota-default-level">未授权默认等级</Label>
             <Input
               id="quota-default-level"
               disabled={quotaBusy || quotaLoading}
@@ -422,7 +416,7 @@ export function LicenseAdminPanel({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="quota-account-factor">J</Label>
+            <Label htmlFor="quota-account-factor">每级基础保障</Label>
             <Input
               id="quota-account-factor"
               disabled={quotaBusy || quotaLoading}
@@ -433,7 +427,7 @@ export function LicenseAdminPanel({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="quota-capability-factor">K</Label>
+            <Label htmlFor="quota-capability-factor">自有能力加成</Label>
             <Input
               id="quota-capability-factor"
               disabled={quotaBusy || quotaLoading}
@@ -446,12 +440,16 @@ export function LicenseAdminPanel({
         </div>
         {quotaSettings ? (
           <div className="rounded-lg border border-border bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-            当前：默认 L{quotaSettings.default_account_level}，J=
-            {quotaSettings.account_level_factor}，K=
-            {quotaSettings.own_capability_factor}
+            当前：未授权默认 L{quotaSettings.default_account_level}
+            ，每级基础保障 {quotaSettings.account_level_factor}{" "}
+            次/小时，自有能力加成 {quotaSettings.own_capability_factor} 次/小时
           </div>
         ) : null}
-        <Button disabled={quotaBusy || quotaLoading} type="submit" variant="outline">
+        <Button
+          disabled={quotaBusy || quotaLoading}
+          type="submit"
+          variant="outline"
+        >
           {quotaBusy || quotaLoading ? (
             <Loader2Icon className="size-4 animate-spin" />
           ) : (

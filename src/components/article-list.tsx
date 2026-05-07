@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { api, type ArticleSummary } from "@/lib/api"
+import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
 import { openUrl } from "@tauri-apps/plugin-opener"
@@ -106,9 +107,17 @@ export function ArticleList({
     setFetchingAid(article.aid)
     toast.info(article.has_content ? "正在重新抓取正文" : "正在抓取正文")
     try {
-      const updated = await api.fetchArticleContent(
-        article.aid,
-        article.has_content
+      const updated = await runWithProviderExecutionReport(
+        {
+          endpoint: "fetch_article_content",
+          observedValue: {
+            aid: article.aid,
+            fakeid: article.fakeid,
+            force: article.has_content,
+          },
+          targetFakeid: article.fakeid,
+        },
+        () => api.fetchArticleContent(article.aid, article.has_content)
       )
       setItems((current) =>
         current.map((item) =>
@@ -292,11 +301,7 @@ function ArticleContentStatus({
   isFetching: boolean
 }) {
   const state = isFetching ? "fetching" : hasContent ? "cached" : "missing"
-  const label = isFetching
-    ? "抓取中"
-    : hasContent
-      ? "正文已抓取"
-      : "正文未抓取"
+  const label = isFetching ? "抓取中" : hasContent ? "正文已抓取" : "正文未抓取"
 
   return (
     <span

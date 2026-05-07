@@ -154,7 +154,7 @@ export function LicenseGate({
               </div>
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
                 <div className="font-medium">授权后</div>
-                <div className="text-muted-foreground">继续抓取</div>
+                <div className="text-muted-foreground">提升账号级别</div>
               </div>
             </div>
             <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
@@ -230,7 +230,7 @@ export function LicenseGate({
             <div className="mb-3">
               <div className="text-sm font-medium">管理员授权</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                为目标 Lovstudio 账号写入云端授权，目标用户登录后会自动激活。
+                为目标 Lovstudio 账号写入云端授权和频率级别。
               </p>
             </div>
             <LicenseAdminPanel

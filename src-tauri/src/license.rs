@@ -13,8 +13,6 @@ type HmacSha256 = Hmac<Sha256>;
 
 const CODE_PREFIX: &str = "WXMP";
 const ACTIVATION_SECRET: &str = env!("WXMP_ACTIVATION_SECRET");
-const DEFAULT_SUPABASE_URL: &str = "https://mgfhqkixkjjwqwqrgvpg.supabase.co";
-const DEFAULT_SUPABASE_PUBLISHABLE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nZmhxa2l4a2pqd3F3cXJndnBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzYxNjg3ODYsImV4cCI6MjA1MTc0NDc4Nn0.KFMgbcZKiPqGPnNnrQjvIBVcKEKP8SPy-728FqJU2rI";
 const LICENSE_FILE_NAME: &str = "license.json";
 const OFFICIAL_DAYS: i64 = 365;
 const TRIAL_DAYS: i64 = 7;
@@ -283,14 +281,33 @@ async fn fetch_remote_license(account_id: &str) -> Result<Option<RemoteLicenseRo
 }
 
 fn supabase_url() -> String {
-    env::var("VITE_LOVSTUDIO_SUPABASE_URL")
-        .or_else(|_| env::var("VITE_SUPABASE_URL"))
-        .unwrap_or_else(|_| DEFAULT_SUPABASE_URL.to_string())
+    configured_value(
+        "VITE_LOVSTUDIO_SUPABASE_URL",
+        option_env!("VITE_LOVSTUDIO_SUPABASE_URL"),
+    )
+    .or_else(|| configured_value("VITE_SUPABASE_URL", option_env!("VITE_SUPABASE_URL")))
+    .unwrap_or_default()
 }
 
 fn supabase_publishable_key() -> String {
-    env::var("VITE_SUPABASE_PUBLISHABLE_KEY")
-        .unwrap_or_else(|_| DEFAULT_SUPABASE_PUBLISHABLE_KEY.to_string())
+    configured_value(
+        "VITE_SUPABASE_PUBLISHABLE_KEY",
+        option_env!("VITE_SUPABASE_PUBLISHABLE_KEY"),
+    )
+    .unwrap_or_default()
+}
+
+fn configured_value(key: &str, compiled_value: Option<&'static str>) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            compiled_value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 fn parse_activation_code(code: &str) -> Result<ActivationPayload> {
