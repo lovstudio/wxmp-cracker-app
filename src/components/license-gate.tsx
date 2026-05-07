@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
 import {
   KeyRoundIcon,
   Loader2Icon,
@@ -12,44 +12,51 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { LicenseAdminPanel } from "@/components/license-admin-panel"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  api,
-  onLoginError,
-  onLoginSuccess,
-  type LicenseStatus,
-} from "@/lib/api"
+import { api, type LicenseStatus } from "@/lib/api"
 import { isTauri } from "@/lib/tauri"
 import { copyableToast as toast } from "@/lib/toast"
 
 interface LicenseGateProps {
+  accountId: string | null
+  accountLabel?: string | null
   open: boolean
   onActivated?: (status: LicenseStatus) => void
+  onOpenAuth: () => void
   onOpenChange: (open: boolean) => void
 }
 
 export function LicenseGate({
+  accountId,
+  accountLabel,
   open,
   onActivated,
+  onOpenAuth,
   onOpenChange,
 }: LicenseGateProps) {
   const runningInTauri = isTauri()
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [code, setCode] = useState("")
   const [activating, setActivating] = useState(false)
-  const [loggingIn, setLoggingIn] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const refreshStatus = async () => {
-    const nextStatus = await api.licenseStatus()
+  const refreshStatus = useCallback(async () => {
+    let nextStatus = await api.licenseStatus(accountId)
+    if (accountId && (!nextStatus.active || nextStatus.kind !== "official")) {
+      try {
+        nextStatus = await api.syncRemoteLicense(accountId)
+      } catch (caughtError) {
+        console.warn("Unable to sync remote license", caughtError)
+      }
+    }
     setStatus(nextStatus)
     return nextStatus
-  }
+  }, [accountId])
 
   useEffect(() => {
     let cancelled = false
@@ -64,12 +71,9 @@ export function LicenseGate({
       return
     }
 
-    api
-      .licenseStatus()
+    refreshStatus()
       .then((nextStatus) => {
         if (!cancelled) {
-          setStatus(nextStatus)
-
           if (nextStatus.active) {
             onActivated?.(nextStatus)
             onOpenChange(false)
@@ -85,37 +89,7 @@ export function LicenseGate({
     return () => {
       cancelled = true
     }
-  }, [onActivated, onOpenChange, open, runningInTauri])
-
-  useEffect(() => {
-    if (!open || !runningInTauri) {
-      return
-    }
-
-    const ok = onLoginSuccess(() => {
-      setLoggingIn(false)
-      toast.success("登录成功，请输入该账号对应的激活码")
-      refreshStatus()
-        .then((nextStatus) => {
-          if (nextStatus.active) {
-            onActivated?.(nextStatus)
-            onOpenChange(false)
-          }
-        })
-        .catch((caughtError) => {
-          setError(errorMessage(caughtError))
-        })
-    })
-    const err = onLoginError((message) => {
-      setLoggingIn(false)
-      setError(`登录失败: ${message}`)
-    })
-
-    return () => {
-      ok.then((unlisten) => unlisten())
-      err.then((unlisten) => unlisten())
-    }
-  }, [onActivated, onOpenChange, open, runningInTauri])
+  }, [onActivated, onOpenChange, open, refreshStatus, runningInTauri])
 
   const submitActivation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -123,7 +97,11 @@ export function LicenseGate({
     setActivating(true)
 
     try {
-      const nextStatus = await api.activateLicense(code)
+      if (!accountId) {
+        throw new Error("请先登录 Lovstudio 账号，再激活该账号。")
+      }
+
+      const nextStatus = await api.activateLicense(code, accountId)
       setStatus(nextStatus)
       setCode("")
 
@@ -141,35 +119,23 @@ export function LicenseGate({
     }
   }
 
-  const openLogin = async () => {
-    setError(null)
-    setLoggingIn(true)
-
-    try {
-      await api.openLogin()
-    } catch (caughtError) {
-      setLoggingIn(false)
-      setError(errorMessage(caughtError))
-    }
-  }
-
   if (!open) {
     return null
   }
 
-  const currentAccountId = status?.current_account_id ?? null
+  const currentAccountId = accountId ?? status?.current_account_id ?? null
   const boundAccountId = status?.account_id ?? null
 
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !activating && !loggingIn) {
+        if (event.target === event.currentTarget && !activating) {
           onOpenChange(false)
         }
       }}
     >
-      <Card className="w-full max-w-md">
+      <Card className="max-h-[calc(100vh-3rem)] w-full max-w-lg overflow-y-auto">
         <CardHeader>
           <div className="mb-1 flex items-center gap-2">
             <ShieldAlertIcon className="size-5 text-primary" />
@@ -179,8 +145,8 @@ export function LicenseGate({
             {status?.message ?? "请输入激活码后继续使用。"}
           </CardDescription>
         </CardHeader>
-        <form onSubmit={submitActivation}>
-          <CardContent className="grid gap-4 pb-3">
+        <CardContent className="grid gap-5 pb-4">
+          <form className="grid gap-4" onSubmit={submitActivation}>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
                 <div className="font-medium">免费额度</div>
@@ -192,14 +158,19 @@ export function LicenseGate({
               </div>
             </div>
             <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-              <div className="font-medium">当前登录账号</div>
+              <div className="font-medium">当前 Lovstudio 账号</div>
+              {accountLabel ? (
+                <div className="mt-1 truncate text-xs text-muted-foreground">
+                  {accountLabel}
+                </div>
+              ) : null}
               <div className="mt-1 font-mono text-xs break-all text-muted-foreground">
                 {currentAccountId ?? "未登录"}
               </div>
             </div>
             {boundAccountId ? (
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-                <div className="font-medium">授权绑定账号</div>
+                <div className="font-medium">授权绑定 Lovstudio 账号</div>
                 <div className="mt-1 font-mono text-xs break-all text-muted-foreground">
                   {boundAccountId}
                 </div>
@@ -225,43 +196,66 @@ export function LicenseGate({
                 {error}
               </p>
             ) : null}
-          </CardContent>
-          <CardFooter className="flex-col items-stretch gap-3">
-            <Button
-              disabled={loggingIn}
-              onClick={() => void openLogin()}
-              type="button"
-              variant="outline"
-            >
-              {loggingIn ? (
-                <Loader2Icon className="size-4 animate-spin" />
-              ) : (
-                <>
-                  <LogInIcon />
-                  登录微信公众平台账号
-                </>
-              )}
-            </Button>
-            <Button
-              disabled={activating || !code.trim() || !currentAccountId}
-              type="submit"
-            >
-              {activating ? (
-                <Loader2Icon className="size-4 animate-spin" />
-              ) : (
-                <>
-                  <ShieldCheckIcon />
-                  激活当前账号
-                </>
-              )}
-            </Button>
-            {status?.license_id ? (
-              <p className="text-center text-xs text-muted-foreground">
-                授权 ID: {status.license_id}
+            <div className="grid gap-3">
+              <Button
+                disabled={activating}
+                onClick={onOpenAuth}
+                type="button"
+                variant="outline"
+              >
+                <LogInIcon />
+                登录 Lovstudio 账号
+              </Button>
+              <Button
+                disabled={activating || !code.trim() || !currentAccountId}
+                type="submit"
+              >
+                {activating ? (
+                  <Loader2Icon className="size-4 animate-spin" />
+                ) : (
+                  <>
+                    <ShieldCheckIcon />
+                    激活当前账号
+                  </>
+                )}
+              </Button>
+              {status?.license_id ? (
+                <p className="text-center text-xs text-muted-foreground">
+                  授权 ID: {status.license_id}
+                </p>
+              ) : null}
+            </div>
+          </form>
+          <div className="border-t border-border pt-4">
+            <div className="mb-3">
+              <div className="text-sm font-medium">管理员授权</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                为目标 Lovstudio 账号写入云端授权，目标用户登录后会自动激活。
               </p>
-            ) : null}
-          </CardFooter>
-        </form>
+            </div>
+            <LicenseAdminPanel
+              defaultTargetAccountId={currentAccountId}
+              onAuthorized={(license) => {
+                if (license.account_id !== currentAccountId) {
+                  return
+                }
+
+                api
+                  .syncRemoteLicense(currentAccountId)
+                  .then((nextStatus) => {
+                    setStatus(nextStatus)
+                    if (nextStatus.active) {
+                      onActivated?.(nextStatus)
+                      onOpenChange(false)
+                    }
+                  })
+                  .catch((caughtError) => {
+                    setError(errorMessage(caughtError))
+                  })
+              }}
+            />
+          </div>
+        </CardContent>
       </Card>
     </div>
   )
@@ -290,7 +284,8 @@ function errorMessage(error: unknown): string {
 
   if (
     message.includes("Command license_status not found") ||
-    message.includes("Command activate_license not found")
+    message.includes("Command activate_license not found") ||
+    message.includes("Command sync_remote_license not found")
   ) {
     return "授权命令未加载。请完全退出当前 Tauri 应用后重新启动，Rust 后端会重新编译并注册授权命令。"
   }

@@ -32,7 +32,15 @@ type AuthContextValue = {
     displayName?: string
   ) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
+  signInWithEmailOtp: (email: string, redirectTo?: string) => Promise<void>
   signInWithGoogle: (redirectTo?: string) => Promise<void>
+  signInWithGoogleIdToken: (credential: string, nonce: string) => Promise<void>
+  getGoogleSignInUrl: (redirectTo?: string) => Promise<string>
+  completeOAuthFromUrl: (url: string) => Promise<void>
+  completeTokenSession: (
+    accessToken: string,
+    refreshToken: string
+  ) => Promise<void>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<void>
   updatePassword: (password: string) => Promise<void>
@@ -183,6 +191,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error
   }, [])
 
+  const signInWithEmailOtp = useCallback(
+    async (email: string, redirectTo?: string) => {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: redirectTo ?? authUrl(),
+          shouldCreateUser: true,
+        },
+      })
+
+      if (error) throw error
+    },
+    []
+  )
+
   const signInWithGoogle = useCallback(async (redirectTo?: string) => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
@@ -193,6 +216,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (error) throw error
   }, [])
+
+  const signInWithGoogleIdToken = useCallback(
+    async (credential: string, nonce: string) => {
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: "google",
+        token: credential,
+        nonce,
+      })
+
+      if (error) throw error
+
+      await syncSession(data.session)
+    },
+    [syncSession]
+  )
+
+  const getGoogleSignInUrl = useCallback(async (redirectTo?: string) => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: redirectTo ?? authUrl(),
+        skipBrowserRedirect: true,
+      },
+    })
+
+    if (error) throw error
+    if (!data.url) throw new Error("未能创建 Google 登录链接。")
+
+    return data.url
+  }, [])
+
+  const completeOAuthFromUrl = useCallback(
+    async (url: string) => {
+      const target = new URL(url.trim())
+      const code = target.searchParams.get("code")
+
+      if (code) {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+        if (error) throw error
+
+        await syncSession(data.session)
+        return
+      }
+
+      const hash = new URLSearchParams(target.hash.replace(/^#/, ""))
+      const accessToken = hash.get("access_token")
+      const refreshToken = hash.get("refresh_token")
+
+      if (accessToken && refreshToken) {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+        if (error) throw error
+
+        await syncSession(data.session)
+        return
+      }
+
+      throw new Error("登录回调链接中没有可用的授权信息。")
+    },
+    [syncSession]
+  )
+
+  const completeTokenSession = useCallback(
+    async (accessToken: string, refreshToken: string) => {
+      const { data, error } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      })
+
+      if (error) throw error
+
+      await syncSession(data.session)
+    },
+    [syncSession]
+  )
 
   const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut()
@@ -241,7 +341,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshProfile,
       signUp,
       signIn,
+      signInWithEmailOtp,
       signInWithGoogle,
+      signInWithGoogleIdToken,
+      getGoogleSignInUrl,
+      completeOAuthFromUrl,
+      completeTokenSession,
       signOut,
       resetPassword,
       updatePassword,
@@ -258,7 +363,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       setGuestMode,
       signIn,
+      signInWithEmailOtp,
       signInWithGoogle,
+      signInWithGoogleIdToken,
+      getGoogleSignInUrl,
+      completeOAuthFromUrl,
+      completeTokenSession,
       signOut,
       signUp,
       updatePassword,

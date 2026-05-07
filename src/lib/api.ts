@@ -84,9 +84,12 @@ export interface LicenseStatus {
 export const api = {
   authStatus: () => invoke<AuthStatus>("auth_status"),
   openLogin: () => invoke<void>("open_login"),
-  licenseStatus: () => invoke<LicenseStatus>("license_status"),
-  activateLicense: (code: string) =>
-    invoke<LicenseStatus>("activate_license", { code }),
+  licenseStatus: (accountId?: string | null) =>
+    invoke<LicenseStatus>("license_status", { accountId: accountId ?? null }),
+  activateLicense: (code: string, accountId: string) =>
+    invoke<LicenseStatus>("activate_license", { code, accountId }),
+  syncRemoteLicense: (accountId: string) =>
+    invoke<LicenseStatus>("sync_remote_license", { accountId }),
   listAccounts: () => invoke<Account[]>("list_accounts"),
   listArticles: (fakeid: string) =>
     invoke<ArticleSummary[]>("list_articles", { fakeid }),

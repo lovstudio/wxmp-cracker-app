@@ -1,14 +1,17 @@
-import { useEffect, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useState, type CSSProperties } from "react"
 import { AccountSidebar } from "@/components/account-sidebar"
 import { AccountWorkspace } from "@/components/account-workspace"
 import { ArticleList } from "@/components/article-list"
 import { ArticleDetail as ArticleDetailView } from "@/components/article-detail"
 import { TopBar, type WorkspaceTabId } from "@/components/top-bar"
 import { AddAccountDialog } from "@/components/add-account-dialog"
+import { LovstudioAuthDialog } from "@/components/lovstudio-auth-dialog"
+import { LicenseAdminDialog } from "@/components/license-admin-panel"
 import { LicenseGate } from "@/components/license-gate"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
+import { AuthProvider, useAuth } from "@/hooks/useAuth"
 import {
   api,
   onFetchAccountProgress,
@@ -31,7 +34,9 @@ const MAX_FETCH_PROGRESS_EVENTS = 36
 export default function App() {
   return (
     <TooltipProvider>
-      <WorkspaceApp />
+      <AuthProvider>
+        <WorkspaceApp />
+      </AuthProvider>
       <Toaster />
     </TooltipProvider>
   )
@@ -44,6 +49,12 @@ type PendingFetch = {
 }
 
 function WorkspaceApp() {
+  const {
+    isLoading: lovstudioAuthLoading,
+    profile,
+    signOut: signOutLovstudio,
+    user,
+  } = useAuth()
   const [accounts, setAccounts] = useState<Account[]>([])
   const [accountOrder, setAccountOrder] = useState<string[]>(() =>
     readStringList(ACCOUNT_ORDER_STORAGE_KEY)
@@ -60,8 +71,10 @@ function WorkspaceApp() {
   const [authAccount, setAuthAccount] = useState<LoginAccount | null>(null)
   const [lastLoginAt, setLastLoginAt] = useState<number | null>(null)
   const [addAccountOpen, setAddAccountOpen] = useState(false)
+  const [lovstudioAuthOpen, setLovstudioAuthOpen] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
   const [licenseOpen, setLicenseOpen] = useState(false)
+  const [licenseAdminOpen, setLicenseAdminOpen] = useState(false)
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null)
   const [pendingFetch, setPendingFetch] = useState<PendingFetch | null>(null)
   const [fetchProgressEvents, setFetchProgressEvents] = useState<
@@ -89,8 +102,22 @@ function WorkspaceApp() {
   )
   const activeAccount =
     activeAccounts.find((account) => account.fakeid === selectedFakeid) ?? null
+  const lovstudioAccountId = user?.id ?? null
+  const lovstudioDisplayName =
+    profile?.display_name ??
+    authUserMetadataString(user, [
+      "display_name",
+      "full_name",
+      "name",
+      "preferred_username",
+    ])
+  const lovstudioEmail =
+    profile?.email ?? user?.email ?? authUserMetadataString(user, ["email"])
+  const lovstudioAvatarUrl =
+    profile?.avatar_url ??
+    authUserMetadataString(user, ["avatar_url", "picture"])
 
-  const refreshAccounts = async () => {
+  const refreshAccounts = useCallback(async () => {
     try {
       const list = await api.listAccounts()
       setAccounts(list)
@@ -99,9 +126,9 @@ function WorkspaceApp() {
         toast.error(`读取缓存失败: ${e}`)
       }
     }
-  }
+  }, [])
 
-  const refreshAuth = async () => {
+  const refreshAuth = useCallback(async () => {
     try {
       const s = await api.authStatus()
       setLoggedIn(s.logged_in)
@@ -112,16 +139,20 @@ function WorkspaceApp() {
       setAuthAccount(null)
       setLastLoginAt(null)
     }
-  }
+  }, [])
 
-  const refreshLicenseStatus = async () => {
+  const refreshLicenseStatus = useCallback(async () => {
     if (!isTauri()) {
       setLicenseStatus(browserPreviewLicenseStatus())
       return browserPreviewLicenseStatus()
     }
 
     try {
-      const status = await api.licenseStatus()
+      const localStatus = await api.licenseStatus(lovstudioAccountId)
+      const status = await syncRemoteLicenseIfNeeded(
+        localStatus,
+        lovstudioAccountId
+      )
       setLicenseStatus(status)
       return status
     } catch (error) {
@@ -129,7 +160,7 @@ function WorkspaceApp() {
       setLicenseStatus(status)
       return status
     }
-  }
+  }, [lovstudioAccountId])
 
   useEffect(() => {
     const initialRefreshTimer = window.setTimeout(() => {
@@ -156,7 +187,15 @@ function WorkspaceApp() {
       err.then((un) => un())
       progress.then((un) => un())
     }
-  }, [])
+  }, [refreshAccounts, refreshAuth, refreshLicenseStatus])
+
+  useEffect(() => {
+    if (lovstudioAuthLoading) {
+      return
+    }
+
+    void refreshLicenseStatus()
+  }, [lovstudioAuthLoading, refreshLicenseStatus])
 
   useEffect(() => {
     writeStringList(ACCOUNT_ORDER_STORAGE_KEY, accountOrder)
@@ -171,8 +210,15 @@ function WorkspaceApp() {
   }, [pinnedFakeids])
 
   const openAddAccount = () => {
+    if (!lovstudioAccountId) {
+      toast.error("请先登录 Lovstudio 账号")
+      setLovstudioAuthOpen(true)
+      return
+    }
+
     if (!loggedIn) {
-      toast.error("请先扫码登录")
+      toast.error("请先扫码登录微信公众号")
+      api.openLogin().catch((e) => toast.error(errorMessage(e)))
       return
     }
     setFetchProgressEvents([])
@@ -369,10 +415,16 @@ function WorkspaceApp() {
             archivedAccounts={archivedAccounts}
             pinnedFakeids={pinnedFakeids}
             activeFakeid={selectedFakeid}
+            lovstudioDisplayName={lovstudioDisplayName}
+            lovstudioEmail={lovstudioEmail}
+            lovstudioAvatarUrl={lovstudioAvatarUrl}
+            lovstudioUserId={lovstudioAccountId}
             loggedIn={loggedIn}
             authAccount={authAccount}
             lastLoginAt={lastLoginAt}
             onAddAccount={openAddAccount}
+            onLovstudioLogin={() => setLovstudioAuthOpen(true)}
+            onLovstudioLogout={() => void signOutLovstudio()}
             onLogin={() => {
               api.openLogin().catch((e) => toast.error(errorMessage(e)))
             }}
@@ -393,6 +445,7 @@ function WorkspaceApp() {
               accountCount={activeAccounts.length}
               articleCount={totalArticles}
               activeTab={activeTab}
+              onOpenLicenseAdmin={() => setLicenseAdminOpen(true)}
               onTabChange={setActiveTab}
             />
             <div className="workspace-grid flex min-h-0 flex-1 overflow-hidden">
@@ -451,12 +504,29 @@ function WorkspaceApp() {
         />
       ) : null}
       <LicenseGate
+        accountId={lovstudioAccountId}
+        accountLabel={lovstudioEmail ?? lovstudioDisplayName}
         open={licenseOpen}
         onActivated={continuePendingFetch}
+        onOpenAuth={() => setLovstudioAuthOpen(true)}
         onOpenChange={(open) => {
           setLicenseOpen(open)
           if (!open) setPendingFetch(null)
         }}
+      />
+      <LicenseAdminDialog
+        defaultTargetAccountId={lovstudioAccountId}
+        open={licenseAdminOpen}
+        onAuthorized={(license) => {
+          if (license.account_id === lovstudioAccountId) {
+            void refreshLicenseStatus()
+          }
+        }}
+        onOpenChange={setLicenseAdminOpen}
+      />
+      <LovstudioAuthDialog
+        open={lovstudioAuthOpen}
+        onOpenChange={setLovstudioAuthOpen}
       />
     </>
   )
@@ -485,10 +555,20 @@ function ActivationWatermark({
 }
 
 function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String((error as { message: unknown }).message)
+  const message =
+    typeof error === "object" && error && "message" in error
+      ? String((error as { message: unknown }).message)
+      : String(error)
+
+  if (
+    message.includes("Command license_status not found") ||
+    message.includes("Command activate_license not found") ||
+    message.includes("Command sync_remote_license not found")
+  ) {
+    return "授权命令未加载。请完全退出当前 Tauri 应用后重新启动，Rust 后端会重新编译并注册授权命令。"
   }
-  return String(error)
+
+  return message
 }
 
 function initialFetchProgress(
@@ -516,6 +596,26 @@ function needsLicenseForFetch(
 ) {
   const alreadyTracked = accounts.some((item) => item.fakeid === account.fakeid)
   return !alreadyTracked && accounts.length >= 1
+}
+
+async function syncRemoteLicenseIfNeeded(
+  status: LicenseStatus,
+  accountId: string | null
+) {
+  if (!isTauri() || !accountId) {
+    return status
+  }
+
+  if (status.active && status.kind === "official") {
+    return status
+  }
+
+  try {
+    return await api.syncRemoteLicense(accountId)
+  } catch (error) {
+    console.warn("Unable to sync remote license", error)
+    return status
+  }
 }
 
 function browserPreviewLicenseStatus(): LicenseStatus {
@@ -546,6 +646,33 @@ function licenseErrorStatus(message: string): LicenseStatus {
     current_account_id: null,
     message,
   }
+}
+
+function authUserMetadataString(
+  user: {
+    user_metadata?: Record<string, unknown> | null
+    identities?: Array<{
+      identity_data?: Record<string, unknown> | null
+    }> | null
+  } | null,
+  keys: string[]
+) {
+  const metadataSources = [
+    user?.user_metadata,
+    ...(user?.identities?.map((identity) => identity.identity_data) ?? []),
+  ]
+
+  for (const key of keys) {
+    for (const metadata of metadataSources) {
+      const value = metadata?.[key]
+
+      if (typeof value === "string" && value.trim()) {
+        return value.trim()
+      }
+    }
+  }
+
+  return null
 }
 
 function readStringList(key: string): string[] {

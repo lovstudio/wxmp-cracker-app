@@ -60,11 +60,153 @@ export type Database = {
         }
         Relationships: []
       }
+      wxmp_licenses: {
+        Row: {
+          account_id: string
+          created_at: string
+          created_by: string | null
+          customer: string | null
+          expires_at: string
+          id: string
+          kind: Database["public"]["Enums"]["license_kind"]
+          quota_level: number
+          status: Database["public"]["Enums"]["license_status"]
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          created_by?: string | null
+          customer?: string | null
+          expires_at: string
+          id?: string
+          kind: Database["public"]["Enums"]["license_kind"]
+          quota_level?: number
+          status?: Database["public"]["Enums"]["license_status"]
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          created_by?: string | null
+          customer?: string | null
+          expires_at?: string
+          id?: string
+          kind?: Database["public"]["Enums"]["license_kind"]
+          quota_level?: number
+          status?: Database["public"]["Enums"]["license_status"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      wxmp_quota_settings: {
+        Row: {
+          account_level_factor: number
+          created_at: string
+          default_account_level: number
+          id: string
+          own_capability_factor: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          account_level_factor?: number
+          created_at?: string
+          default_account_level?: number
+          id?: string
+          own_capability_factor?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          account_level_factor?: number
+          created_at?: string
+          default_account_level?: number
+          id?: string
+          own_capability_factor?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      wxmp_user_capabilities: {
+        Row: {
+          capability_units: number
+          commercial_terms_accepted_at: string | null
+          created_at: string
+          mp_alias: string | null
+          mp_nickname: string | null
+          mp_username: string | null
+          provides_to_others: boolean
+          service_type: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          capability_units?: number
+          commercial_terms_accepted_at?: string | null
+          created_at?: string
+          mp_alias?: string | null
+          mp_nickname?: string | null
+          mp_username?: string | null
+          provides_to_others?: boolean
+          service_type?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Update: {
+          capability_units?: number
+          commercial_terms_accepted_at?: string | null
+          created_at?: string
+          mp_alias?: string | null
+          mp_nickname?: string | null
+          mp_username?: string | null
+          provides_to_others?: boolean
+          service_type?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      get_wxmp_license: {
+        Args: {
+          _account_id: string
+        }
+        Returns: {
+          account_id: string
+          customer: string | null
+          expires_at: string
+          expires_at_epoch: number
+          id: string
+          kind: Database["public"]["Enums"]["license_kind"]
+          quota_level: number
+          status: Database["public"]["Enums"]["license_status"]
+          updated_at: string
+        }[]
+      }
+      get_wxmp_quota_entitlement: {
+        Args: {
+          _account_id: string
+        }
+        Returns: {
+          account_id: string
+          account_level: number
+          account_level_factor: number
+          commercial_terms_accepted_at: string | null
+          hourly_quota: number
+          own_capability_factor: number
+          own_capability_units: number
+          provides_to_others: boolean
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -75,6 +217,8 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
+      license_kind: "trial" | "official"
+      license_status: "active" | "revoked"
     }
     CompositeTypes: {
       [_ in never]: never

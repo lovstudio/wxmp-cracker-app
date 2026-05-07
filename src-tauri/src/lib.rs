@@ -89,6 +89,7 @@ pub fn run() {
             commands::open_login,
             commands::license_status,
             commands::activate_license,
+            commands::sync_remote_license,
             commands::list_accounts,
             commands::list_articles,
             commands::get_article,

@@ -4,7 +4,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    env, fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,6 +13,8 @@ type HmacSha256 = Hmac<Sha256>;
 
 const CODE_PREFIX: &str = "WXMP";
 const ACTIVATION_SECRET: &str = env!("WXMP_ACTIVATION_SECRET");
+const DEFAULT_SUPABASE_URL: &str = "https://mgfhqkixkjjwqwqrgvpg.supabase.co";
+const DEFAULT_SUPABASE_PUBLISHABLE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nZmhxa2l4a2pqd3F3cXJndnBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzYxNjg3ODYsImV4cCI6MjA1MTc0NDc4Nn0.KFMgbcZKiPqGPnNnrQjvIBVcKEKP8SPy-728FqJU2rI";
 const LICENSE_FILE_NAME: &str = "license.json";
 const OFFICIAL_DAYS: i64 = 365;
 const TRIAL_DAYS: i64 = 7;
@@ -66,6 +68,16 @@ struct LicenseRecord {
     signature: String,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+struct RemoteLicenseRow {
+    id: String,
+    account_id: String,
+    kind: LicenseKind,
+    expires_at_epoch: i64,
+    #[serde(default)]
+    customer: Option<String>,
+}
+
 pub fn status(current_account_id: Option<&str>) -> Result<LicenseStatus> {
     let now = current_unix_timestamp();
     let current_account_id = current_account_id.map(ToOwned::to_owned);
@@ -76,7 +88,7 @@ pub fn status(current_account_id: Option<&str>) -> Result<LicenseStatus> {
             current_account_id.as_deref(),
         )),
         Ok(None) => Ok(inactive_status(
-            "尚未激活，请先登录微信公众平台账号，再输入对应账号的激活码。",
+            "尚未激活，请先登录 Lovstudio 账号，再输入对应账号的激活码或等待远程授权自动同步。",
             current_account_id,
         )),
         Err(e) => {
@@ -95,7 +107,7 @@ pub fn activate(code: &str, current_account_id: &str) -> Result<LicenseStatus> {
     let payload = parse_activation_code(&normalized_code)?;
     if normalize_account_id(&payload.account_id)? != current_account_id {
         return Err(anyhow!(
-            "激活码绑定账号为 {}，当前登录账号为 {}，请切换到对应账号后再激活。",
+            "激活码绑定 Lovstudio 账号为 {}，当前 Lovstudio 账号为 {}，请切换到对应账号后再激活。",
             payload.account_id,
             current_account_id
         ));
@@ -163,6 +175,124 @@ pub fn activate(code: &str, current_account_id: &str) -> Result<LicenseStatus> {
     ))
 }
 
+pub async fn sync_remote(current_account_id: &str) -> Result<LicenseStatus> {
+    let current_account_id = normalize_account_id(current_account_id)?;
+    let remote = fetch_remote_license(&current_account_id).await?;
+
+    let Some(remote) = remote else {
+        return status(Some(current_account_id.as_str()));
+    };
+
+    install_remote_license(remote, &current_account_id)
+}
+
+fn install_remote_license(
+    remote: RemoteLicenseRow,
+    current_account_id: &str,
+) -> Result<LicenseStatus> {
+    let remote_account_id = normalize_account_id(&remote.account_id)?;
+    if remote_account_id != current_account_id {
+        return Err(anyhow!("远程授权 Lovstudio 账号与当前账号不匹配。"));
+    }
+
+    let now = current_unix_timestamp();
+    if remote.expires_at_epoch <= now {
+        return status(Some(current_account_id));
+    }
+
+    let current = match read_license() {
+        Ok(record) => record,
+        Err(e) => {
+            log::warn!("invalid license file ignored during remote sync: {e:?}");
+            None
+        }
+    };
+
+    if let Some(record) = current.as_ref() {
+        let local_status = status_from_record(record, now, Some(current_account_id));
+
+        if local_status.active {
+            let remote_is_upgrade = remote.expires_at_epoch > record.expires_at
+                || (remote.kind == LicenseKind::Official && record.kind == LicenseKind::Trial);
+            let remote_is_downgrade =
+                record.kind == LicenseKind::Official && remote.kind == LicenseKind::Trial;
+
+            if !remote_is_upgrade || remote_is_downgrade {
+                return Ok(local_status);
+            }
+        }
+    }
+
+    let trial_used = remote.kind == LicenseKind::Trial
+        || current.as_ref().is_some_and(|record| record.trial_used);
+    let source = format!(
+        "remote:{}:{}:{}",
+        remote.id, current_account_id, remote.expires_at_epoch
+    );
+    let record = LicenseRecord {
+        v: 1,
+        code_hash: code_hash(&source),
+        account_id: current_account_id.to_string(),
+        kind: remote.kind,
+        activated_at: now,
+        expires_at: remote.expires_at_epoch,
+        issued_at: now,
+        customer: remote
+            .customer
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        trial_used,
+        signature: String::new(),
+    };
+
+    write_license(&record)?;
+    Ok(status_from_record(&record, now, Some(current_account_id)))
+}
+
+async fn fetch_remote_license(account_id: &str) -> Result<Option<RemoteLicenseRow>> {
+    let url = supabase_url();
+    let key = supabase_publishable_key();
+    if url.trim().is_empty() || key.trim().is_empty() {
+        return Err(anyhow!("未配置远程授权服务。"));
+    }
+
+    let endpoint = format!("{}/rest/v1/rpc/get_wxmp_license", url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(endpoint)
+        .header("apikey", key.as_str())
+        .bearer_auth(key.as_str())
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "_account_id": account_id }))
+        .send()
+        .await
+        .context("连接远程授权服务失败")?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "远程授权服务返回异常（{}）：{}",
+            status.as_u16(),
+            body
+        ));
+    }
+
+    let rows: Vec<RemoteLicenseRow> =
+        serde_json::from_str(&body).context("解析远程授权结果失败")?;
+    Ok(rows.into_iter().next())
+}
+
+fn supabase_url() -> String {
+    env::var("VITE_LOVSTUDIO_SUPABASE_URL")
+        .or_else(|_| env::var("VITE_SUPABASE_URL"))
+        .unwrap_or_else(|_| DEFAULT_SUPABASE_URL.to_string())
+}
+
+fn supabase_publishable_key() -> String {
+    env::var("VITE_SUPABASE_PUBLISHABLE_KEY")
+        .unwrap_or_else(|_| DEFAULT_SUPABASE_PUBLISHABLE_KEY.to_string())
+}
+
 fn parse_activation_code(code: &str) -> Result<ActivationPayload> {
     let parts: Vec<&str> = code.split('.').collect();
     if parts.len() != 4 || !parts[0].eq_ignore_ascii_case(CODE_PREFIX) {
@@ -227,12 +357,12 @@ fn status_from_record(
         format!("{kind_label}已过期，请输入新的正式激活码。")
     } else if current_account_id.is_none() {
         format!(
-            "{kind_label}已绑定账号 {}，请先登录该账号。",
+            "{kind_label}已绑定 Lovstudio 账号 {}，请先登录该账号。",
             record.account_id
         )
     } else if !account_matches {
         format!(
-            "{kind_label}已绑定账号 {}，当前登录账号无权使用。",
+            "{kind_label}已绑定 Lovstudio 账号 {}，当前账号无权使用。",
             record.account_id
         )
     } else {
@@ -283,7 +413,7 @@ fn normalize_account_id(account_id: &str) -> Result<String> {
     let normalized = account_id.trim().to_string();
     if normalized.is_empty() {
         return Err(anyhow!(
-            "请先登录微信公众平台账号，且该账号需要能识别到账号 ID。"
+            "请先登录 Lovstudio 账号，且该账号需要能识别到用户 ID。"
         ));
     }
     Ok(normalized)

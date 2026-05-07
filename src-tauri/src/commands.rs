@@ -90,17 +90,22 @@ pub fn open_login(app: AppHandle) -> Result<(), CmdError> {
 }
 
 #[tauri::command]
-pub async fn license_status() -> Result<license::LicenseStatus, CmdError> {
-    let account_id = current_license_account_id().await;
+pub fn license_status(account_id: Option<String>) -> Result<license::LicenseStatus, CmdError> {
+    let account_id = normalize_optional_account_id(account_id);
     license::status(account_id.as_deref()).map_err(Into::into)
 }
 
 #[tauri::command]
-pub async fn activate_license(code: String) -> Result<license::LicenseStatus, CmdError> {
-    let account_id = current_license_account_id().await.ok_or_else(|| CmdError {
-        message: "请先登录微信公众平台账号，再激活该账号。".to_string(),
-    })?;
+pub fn activate_license(
+    code: String,
+    account_id: String,
+) -> Result<license::LicenseStatus, CmdError> {
     license::activate(&code, &account_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn sync_remote_license(account_id: String) -> Result<license::LicenseStatus, CmdError> {
+    license::sync_remote(&account_id).await.map_err(Into::into)
 }
 
 #[tauri::command]
@@ -125,21 +130,10 @@ pub fn cache_db_path() -> Result<String, CmdError> {
         .map_err(Into::into)
 }
 
-async fn current_license_account_id() -> Option<String> {
-    let status = auth::current_status().await;
-    if !status.logged_in {
-        return None;
-    }
-
-    status.account.as_ref().and_then(login_account_id)
-}
-
-fn login_account_id(account: &auth::LoginAccount) -> Option<String> {
-    [&account.username, &account.alias]
-        .into_iter()
-        .flatten()
+fn normalize_optional_account_id(account_id: Option<String>) -> Option<String> {
+    account_id
         .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
+        .filter(|value| !value.is_empty())
 }
 
 #[tauri::command]

@@ -5,6 +5,7 @@ import {
   InfoIcon,
   MoonIcon,
   PenLineIcon,
+  ShieldCheckIcon,
   SunIcon,
   Table2Icon,
 } from "lucide-react"
@@ -30,6 +31,7 @@ interface TopBarProps {
   accountCount: number
   articleCount: number
   activeTab: WorkspaceTabId
+  onOpenLicenseAdmin: () => void
   onTabChange: (tab: WorkspaceTabId) => void
 }
 
@@ -49,6 +51,7 @@ export function TopBar({
   accountCount,
   articleCount,
   activeTab,
+  onOpenLicenseAdmin,
   onTabChange,
 }: TopBarProps) {
   const { theme, setTheme } = useTheme()
@@ -94,6 +97,21 @@ export function TopBar({
           <span>篇文章</span>
         </div>
       </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="打开授权管理"
+            className="border-border/70 bg-card/70 text-foreground shadow-sm"
+            onClick={onOpenLicenseAdmin}
+          >
+            <ShieldCheckIcon className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">授权管理</TooltipContent>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
