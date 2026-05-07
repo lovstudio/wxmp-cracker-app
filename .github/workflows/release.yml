@@ -38,18 +38,19 @@ jobs:
             ' CHANGELOG.md)
           fi
           if [ -z "$NOTES" ]; then NOTES="Release $VERSION"; fi
-          MACOS_NOTE="
-
+          {
+            echo 'notes<<EOF'
+            echo "$NOTES"
+            cat <<'MACOS_NOTE'
 ---
 
 macOS users: this app is not signed yet. If macOS blocks the first launch, run:
-\`\`\`bash
+```bash
 sudo xattr -dr com.apple.quarantine /Applications/微探.app
-\`\`\`"
-          echo 'notes<<EOF' >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
-          echo "$MACOS_NOTE" >> "$GITHUB_OUTPUT"
-          echo 'EOF' >> "$GITHUB_OUTPUT"
+```
+MACOS_NOTE
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create draft release
         id: create
