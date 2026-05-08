@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 - 2026-05-08
+
+### Fixed
+
+- Fixed blank desktop windows in published builds by injecting Lovstudio Supabase frontend settings into release jobs.
+- Split the public website entry from the Tauri workspace bundle so the website does not initialize desktop-only Supabase code.
+- Added a desktop startup error boundary so configuration failures show a clear message instead of a blank window.
+
+### Changed
+
+- Updated the app version to `0.1.3` across package and Tauri metadata.
+
 ## 0.1.2 - 2026-05-08
 
 ### Added

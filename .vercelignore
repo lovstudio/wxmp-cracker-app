@@ -1,0 +1,9 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+src-tauri/**/*.log
+*.log
+.DS_Store
+.env.local
+.activation-secret.local

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   CalendarIcon,
   CheckCircle2Icon,
@@ -15,7 +15,7 @@ import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { api, type ArticleSummary } from "@/lib/api"
+import { api, type ArticleMatchField, type ArticleSummary } from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
@@ -47,6 +47,11 @@ export function ArticleList({
   const [q, setQ] = useState("")
   const [menu, setMenu] = useState<ArticleMenuState | null>(null)
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
+  const [searchItems, setSearchItems] = useState<ArticleSummary[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchedQuery, setSearchedQuery] = useState("")
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [contentSearchVersion, setContentSearchVersion] = useState(0)
 
   useEffect(() => {
     if (!menu) return
@@ -72,6 +77,10 @@ export function ArticleList({
   useEffect(() => {
     if (!fakeid) {
       setItems([])
+      setSearchItems([])
+      setSearchedQuery("")
+      setSearchError(null)
+      setLoading(false)
       return
     }
     let cancelled = false
@@ -86,15 +95,61 @@ export function ArticleList({
     }
   }, [fakeid, refreshKey])
 
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase()
+  const trimmedQuery = q.trim()
+
+  useEffect(() => {
+    if (!fakeid || !trimmedQuery) {
+      setSearchItems([])
+      setSearchedQuery("")
+      setSearchError(null)
+      setSearching(false)
+      return
+    }
+
+    let cancelled = false
+    setSearchError(null)
+    setSearching(true)
+
+    const timeout = window.setTimeout(() => {
+      api
+        .searchArticles(fakeid, trimmedQuery)
+        .then((result) => {
+          if (cancelled) return
+          setSearchItems(result)
+          setSearchedQuery(trimmedQuery)
+        })
+        .catch((error) => {
+          if (cancelled) return
+          setSearchItems([])
+          setSearchedQuery("")
+          setSearchError(errorMessage(error))
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false)
+        })
+    }, 180)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+    }
+  }, [fakeid, trimmedQuery, refreshKey, contentSearchVersion])
+
+  const localFiltered = useMemo(() => {
+    const s = trimmedQuery.toLowerCase()
     if (!s) return items
     return items.filter(
       (i) =>
         i.title.toLowerCase().includes(s) ||
-        (i.digest ?? "").toLowerCase().includes(s)
+        (i.digest ?? "").toLowerCase().includes(s) ||
+        (i.author ?? "").toLowerCase().includes(s)
     )
-  }, [items, q])
+  }, [items, trimmedQuery])
+
+  const filtered =
+    trimmedQuery && searchedQuery === trimmedQuery && !searchError
+      ? searchItems
+      : localFiltered
 
   const cachedCount = useMemo(
     () => items.filter((item) => item.has_content).length,
@@ -127,11 +182,12 @@ export function ArticleList({
         )
       )
       onContentFetched?.(updated.aid)
+      setContentSearchVersion((current) => current + 1)
       toast.success(
         article.has_content ? "正文已重新抓取" : "正文已抓取并写入缓存"
       )
     } catch (e) {
-      toast.error(errorMessage(e))
+      toast.wxmpError(errorMessage(e), api.openLogin)
     } finally {
       setFetchingAid(null)
     }
@@ -163,11 +219,19 @@ export function ArticleList({
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={fakeid ? "搜索标题或摘要" : "请先选择公众号"}
+            placeholder={fakeid ? "搜索标题、摘要或正文" : "请先选择公众号"}
             disabled={!fakeid}
-            className="h-9 border-0 bg-transparent pr-3 pl-9 focus-visible:ring-1"
+            className="h-9 border-0 bg-transparent pr-8 pl-9 focus-visible:ring-1"
           />
+          {searching && trimmedQuery && (
+            <LoaderCircleIcon className="absolute top-1/2 right-3 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
+          )}
         </div>
+        {searchError && trimmedQuery && (
+          <div className="mt-2 text-[11px] text-destructive">
+            全文检索失败，已退回标题/摘要搜索
+          </div>
+        )}
       </div>
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         {loading && (
@@ -202,6 +266,8 @@ export function ArticleList({
         )}
         {filtered.map((a) => {
           const cover = normalizeWechatImageUrl(a.cover)
+          const matchFields = getVisibleMatchFields(a, trimmedQuery)
+          const matchExcerpt = trimmedQuery ? a.match_excerpt : null
 
           return (
             <button
@@ -251,7 +317,7 @@ export function ArticleList({
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-start justify-between gap-2">
                     <div className="line-clamp-2 min-w-0 flex-1 text-[14px] leading-snug font-semibold break-words text-foreground">
-                      {a.title}
+                      {highlightText(a.title, trimmedQuery)}
                     </div>
                     <ArticleContentStatus
                       hasContent={a.has_content}
@@ -260,7 +326,22 @@ export function ArticleList({
                   </div>
                   {a.digest && (
                     <div className="mt-1.5 line-clamp-2 text-xs leading-relaxed break-words text-muted-foreground">
-                      {a.digest}
+                      {highlightText(a.digest, trimmedQuery)}
+                    </div>
+                  )}
+                  {matchFields.length > 0 && (
+                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="inline-flex h-5 max-w-full items-center rounded-md border border-primary/25 bg-primary/10 px-1.5 font-medium text-primary">
+                        命中：{formatMatchFields(matchFields)}
+                      </span>
+                    </div>
+                  )}
+                  {matchExcerpt && (
+                    <div className="mt-1.5 line-clamp-2 rounded-md border border-border/70 bg-muted/35 px-2 py-1.5 text-[11px] leading-relaxed break-words text-muted-foreground">
+                      <span className="mr-1 font-medium text-foreground">
+                        片段
+                      </span>
+                      {highlightText(matchExcerpt, trimmedQuery)}
                     </div>
                   )}
                   <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-muted-foreground">
@@ -270,7 +351,7 @@ export function ArticleList({
                     </span>
                     {a.author && (
                       <span className="ml-1 min-w-0 flex-1 truncate font-medium">
-                        {a.author}
+                        {highlightText(a.author, trimmedQuery)}
                       </span>
                     )}
                   </div>
@@ -319,6 +400,69 @@ function ArticleContentStatus({
       <span>{label}</span>
     </span>
   )
+}
+
+const MATCH_FIELD_LABELS: Record<ArticleMatchField, string> = {
+  title: "标题",
+  digest: "摘要",
+  author: "作者",
+  content: "正文",
+}
+
+function getVisibleMatchFields(
+  article: ArticleSummary,
+  query: string
+): ArticleMatchField[] {
+  const fields = article.match_fields ?? []
+  if (fields.length > 0) return Array.from(new Set(fields))
+
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) return []
+
+  const inferred: ArticleMatchField[] = []
+  if (article.title.toLowerCase().includes(normalizedQuery)) {
+    inferred.push("title")
+  }
+  if ((article.digest ?? "").toLowerCase().includes(normalizedQuery)) {
+    inferred.push("digest")
+  }
+  if ((article.author ?? "").toLowerCase().includes(normalizedQuery)) {
+    inferred.push("author")
+  }
+
+  return inferred
+}
+
+function formatMatchFields(fields: ArticleMatchField[]): string {
+  return fields.map((field) => MATCH_FIELD_LABELS[field]).join(" / ")
+}
+
+function highlightText(text: string, query: string): ReactNode {
+  const trimmedQuery = query.trim()
+  if (!trimmedQuery) return text
+
+  const pattern = new RegExp(`(${escapeRegExp(trimmedQuery)})`, "gi")
+  const parts = text.split(pattern)
+  const queryLower = trimmedQuery.toLowerCase()
+
+  if (parts.length === 1) return text
+
+  return parts.map((part, index) =>
+    part.toLowerCase() === queryLower ? (
+      <mark
+        key={`${part}-${index}`}
+        className="rounded-[3px] bg-primary/20 px-0.5 text-foreground"
+      >
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  )
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function ArticleContextMenu({

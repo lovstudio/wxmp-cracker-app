@@ -21,7 +21,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { api, type Account, type ArticleSummary } from "@/lib/api"
+import {
+  api,
+  type Account,
+  type AccountSearchResult,
+  type ArticleSummary,
+} from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyableToast as toast } from "@/lib/toast"
@@ -99,7 +104,6 @@ function CollectionManager({
   const nextResumeLimit = Math.min(Math.max(articles.length + 20, 20), 500)
   const collectionBusy = Boolean(fetchingAid) || resuming
   const canResume = !loading && !collectionBusy && articles.length < 500
-  const resumeQueries = getAccountFetchQueries(account)
 
   const fetchContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
@@ -131,7 +135,7 @@ function CollectionManager({
         article.has_content ? "正文已重新抓取" : "正文已抓取并写入缓存"
       )
     } catch (error) {
-      toast.error(errorMessage(error))
+      toast.wxmpError(errorMessage(error), api.openLogin)
     } finally {
       setFetchingAid(null)
     }
@@ -143,7 +147,11 @@ function CollectionManager({
     setResuming(true)
     toast.info(`正在续采 ${account.nickname}，目标索引 ${nextResumeLimit} 篇`)
     try {
-      await fetchAccountWithFallback(resumeQueries, nextResumeLimit, false)
+      await api.fetchSelectedAccount(
+        accountToSearchResult(account),
+        nextResumeLimit,
+        false
+      )
       const updatedArticles = await api.listArticles(account.fakeid)
       setArticles(
         [...updatedArticles].sort((a, b) => b.create_time - a.create_time)
@@ -155,7 +163,7 @@ function CollectionManager({
           : "续采完成，当前没有新增文章"
       )
     } catch (error) {
-      toast.error(errorMessage(error))
+      toast.wxmpError(errorMessage(error), api.openLogin)
     } finally {
       setResuming(false)
     }
@@ -686,36 +694,14 @@ function formatPercent(part: number, total: number): string {
   return `${Math.round((part / total) * 100)}%`
 }
 
-function getAccountFetchQueries(account: Account): string[] {
-  return uniqueNonEmpty([account.nickname, account.alias, account.fakeid])
-}
-
-async function fetchAccountWithFallback(
-  queries: string[],
-  limit: number,
-  withContent: boolean
-) {
-  let lastError: unknown = null
-
-  for (const query of queries) {
-    try {
-      return await api.fetchAccount(query, limit, withContent)
-    } catch (error) {
-      lastError = error
-    }
+function accountToSearchResult(account: Account): AccountSearchResult {
+  return {
+    fakeid: account.fakeid,
+    nickname: account.nickname,
+    alias: account.alias,
+    signature: account.signature,
+    avatar: account.avatar,
   }
-
-  throw lastError ?? new Error("没有可用的公众号续采标识")
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
-  return Array.from(
-    new Set(
-      values
-        .map((value) => value?.trim())
-        .filter((value): value is string => Boolean(value))
-    )
-  )
 }
 
 function errorMessage(error: unknown): string {

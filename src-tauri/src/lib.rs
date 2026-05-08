@@ -92,6 +92,7 @@ pub fn run() {
             commands::sync_remote_license,
             commands::list_accounts,
             commands::list_articles,
+            commands::search_articles,
             commands::get_article,
             commands::cache_db_path,
             commands::search_accounts,

@@ -75,7 +75,7 @@ export function ArticleDetail({
       onContentFetched?.(updated.aid)
       toast.success("正文已抓取并写入本地缓存")
     } catch (e) {
-      toast.error(errorMessage(e))
+      toast.wxmpError(errorMessage(e), api.openLogin)
     } finally {
       setFetchingContent(false)
     }

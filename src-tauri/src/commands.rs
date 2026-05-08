@@ -119,6 +119,11 @@ pub fn list_articles(fakeid: String) -> Result<Vec<ArticleSummary>, CmdError> {
 }
 
 #[tauri::command]
+pub fn search_articles(fakeid: String, query: String) -> Result<Vec<ArticleSummary>, CmdError> {
+    db::search_articles(&fakeid, &query).map_err(Into::into)
+}
+
+#[tauri::command]
 pub fn get_article(aid: String) -> Result<Option<ArticleDetail>, CmdError> {
     db::get_article(&aid).map_err(Into::into)
 }

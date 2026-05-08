@@ -107,6 +107,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WXMP_ACTIVATION_SECRET: ${{ secrets.WXMP_ACTIVATION_SECRET }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
         run: |
           bun tauri build ${{ matrix.args }}
           $tag = "${{ needs.create-release.outputs.tag }}"
@@ -124,6 +127,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WXMP_ACTIVATION_SECRET: ${{ secrets.WXMP_ACTIVATION_SECRET }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
@@ -136,6 +142,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WXMP_ACTIVATION_SECRET: ${{ secrets.WXMP_ACTIVATION_SECRET }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}

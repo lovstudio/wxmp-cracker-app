@@ -10,6 +10,8 @@ export interface Account {
   article_count: number
 }
 
+export type ArticleMatchField = "title" | "digest" | "author" | "content"
+
 export interface ArticleSummary {
   aid: string
   fakeid: string
@@ -20,6 +22,8 @@ export interface ArticleSummary {
   author: string | null
   create_time: number
   has_content: boolean
+  match_fields?: ArticleMatchField[]
+  match_excerpt?: string | null
 }
 
 export interface ArticleDetail extends ArticleSummary {
@@ -93,6 +97,8 @@ export const api = {
   listAccounts: () => invoke<Account[]>("list_accounts"),
   listArticles: (fakeid: string) =>
     invoke<ArticleSummary[]>("list_articles", { fakeid }),
+  searchArticles: (fakeid: string, query: string) =>
+    invoke<ArticleSummary[]>("search_articles", { fakeid, query }),
   getArticle: (aid: string) =>
     invoke<ArticleDetail | null>("get_article", { aid }),
   cacheDbPath: () => invoke<string>("cache_db_path"),
