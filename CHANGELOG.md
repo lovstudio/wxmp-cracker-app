@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 - 2026-05-09
+
+### Fixed
+
+- Fixed website hero layout overlap by tightening hero copy width and moving the product backdrop into the normal responsive flow on narrower screens.
+
 ## 0.1.4 - 2026-05-08
 
 ### Fixed
