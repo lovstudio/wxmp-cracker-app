@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4 - 2026-05-08
+
+### Fixed
+
+- Routed Lovstudio desktop login through `wxmp.lovstudio.ai` so the app no longer depends on the currently misconfigured `lovstudio.ai` DNS target.
+- Added `wxmp.lovstudio.ai` device-auth start, poll, authorize, and auth routes for Lovstudio account login.
+- Added request timeouts and explicit Lovstudio login service errors so the login button cannot spin forever.
+- Excluded generated Tauri build output from ESLint scans.
+
 ## 0.1.3 - 2026-05-08
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 Powered by Lovstudio。
 
-Latest: `v0.1.3`
+Latest: `v0.1.4`
 
 微探是一款跨端桌面 App：用三栏工作台采集、浏览并分析 [wcx](https://github.com/lovstudio/wcx) 抓回来的微信公众号文章。登录扫码在 app 内嵌的 WebviewWindow 里完成，不依赖外部 Chrome。
 

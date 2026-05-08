@@ -1,7 +1,8 @@
 const LOVSTUDIO_SITE_URL = (
   (import.meta.env.VITE_LOVSTUDIO_SITE_URL as string | undefined) ??
-  "https://lovstudio.ai"
+  "https://wxmp.lovstudio.ai"
 ).replace(/\/$/, "")
+const LOVSTUDIO_REQUEST_TIMEOUT_MS = 12_000
 
 type DeviceAuthStartResponse = {
   deviceCode?: string
@@ -128,13 +129,36 @@ export async function pollLovstudioDeviceAuth(
 }
 
 async function postJson<T>(path: string, body: Record<string, unknown>) {
-  const response = await fetch(`${LOVSTUDIO_SITE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    LOVSTUDIO_REQUEST_TIMEOUT_MS
+  )
+
+  let response: Response
+
+  try {
+    response = await fetch(`${LOVSTUDIO_SITE_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(
+        "Lovstudio 登录服务响应超时。请检查网络后重试；如果持续出现，请使用下方登录回调链接方式。"
+      )
+    }
+
+    throw new Error(
+      `无法连接 Lovstudio 登录服务（${LOVSTUDIO_SITE_URL}）。请检查网络后重试。`
+    )
+  } finally {
+    window.clearTimeout(timeout)
+  }
 
   const json = (await response.json().catch(() => ({}))) as T & {
     error?: string

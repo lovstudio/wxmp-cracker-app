@@ -1,30 +1,30 @@
 const REPO = "lovstudio/wxmp-cracker-app"
-const RELEASE_TAG = "v0.1.3"
+const RELEASE_TAG = "v0.1.4"
 const GITHUB_RELEASE_URL = `https://github.com/${REPO}/releases/download/${RELEASE_TAG}`
 
 const DOWNLOAD_TARGETS = {
   "macos-arm64": {
-    assetName: "wxmp-cracker-app-0.1.3-darwin-aarch64.dmg",
+    assetName: "wxmp-cracker-app-0.1.4-darwin-aarch64.dmg",
     contentType: "application/x-apple-diskimage",
   },
   "macos-x64": {
-    assetName: "wxmp-cracker-app-0.1.3-darwin-x64.dmg",
+    assetName: "wxmp-cracker-app-0.1.4-darwin-x64.dmg",
     contentType: "application/x-apple-diskimage",
   },
   "windows-x64": {
-    assetName: "wxmp-cracker-app-v0.1.3-windows-x64.zip",
+    assetName: "wxmp-cracker-app-v0.1.4-windows-x64.zip",
     contentType: "application/zip",
   },
   "linux-appimage": {
-    assetName: "wxmp-cracker-app-0.1.3-linux-amd64.AppImage",
+    assetName: "wxmp-cracker-app-0.1.4-linux-amd64.AppImage",
     contentType: "application/octet-stream",
   },
   "linux-deb": {
-    assetName: "wxmp-cracker-app-0.1.3-linux-amd64.deb",
+    assetName: "wxmp-cracker-app-0.1.4-linux-amd64.deb",
     contentType: "application/vnd.debian.binary-package",
   },
   "linux-rpm": {
-    assetName: "wxmp-cracker-app-0.1.3-linux-x86_64.rpm",
+    assetName: "wxmp-cracker-app-0.1.4-linux-x86_64.rpm",
     contentType: "application/x-rpm",
   },
 }

@@ -1,10 +1,19 @@
 import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from "react"
-import { Website } from "@/pages/Website"
 import { isTauri } from "@/lib/tauri"
+import { Website } from "@/pages/Website"
 
 const WorkspaceShell = lazy(() => import("@/WorkspaceApp"))
+const PublicAuthRoutes = lazy(() => import("@/pages/AuthRoutes"))
 
 export default function App() {
+  if (!isTauri() && isPublicAuthRoute()) {
+    return (
+      <Suspense fallback={<div className="app-loading-screen">正在打开登录</div>}>
+        <PublicAuthRoutes />
+      </Suspense>
+    )
+  }
+
   if (!isTauri() && !isWorkspacePreviewRoute()) {
     return <Website />
   }
@@ -22,6 +31,13 @@ function isWorkspacePreviewRoute() {
   return (
     window.location.pathname === "/workspace-preview" ||
     window.location.search.includes("workspace=1")
+  )
+}
+
+function isPublicAuthRoute() {
+  return (
+    window.location.pathname === "/auth" ||
+    window.location.pathname === "/cli/authorize"
   )
 }
 
