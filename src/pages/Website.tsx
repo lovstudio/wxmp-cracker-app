@@ -28,8 +28,8 @@ import type { ReactNode } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const SITE_URL = "https://wxmp.lovstudio.ai"
-const LATEST_VERSION = "0.1.4"
-const RELEASE_DATE = "2026-05-08"
+const LATEST_VERSION = "0.1.6"
+const RELEASE_DATE = "2026-05-09"
 
 type IconBlock = {
   icon: LucideIcon
@@ -407,7 +407,8 @@ function DocsPage() {
           <DocBlock id="release" icon={Clock3} title="版本">
             <p>
               当前官网展示版本为 v{LATEST_VERSION}，发布日期 {RELEASE_DATE}。
-              v0.1.4 修复 Lovstudio 登录接口在旧域名异常时一直转圈的问题，并继续保留 v0.1.3 的桌面启动白屏修复。
+              v0.1.6 内置 wcx 运行环境并加入应用自动更新，用户无需手动安装
+              Python 或 wcx。
             </p>
             <a className="site-button site-button-ghost" href="/#download">
               <Download className="site-icon" aria-hidden="true" />
