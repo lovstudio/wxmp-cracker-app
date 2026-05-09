@@ -62,20 +62,40 @@ jobs:
           - name: Windows
             platform: windows-latest
             args: "--no-bundle"
+            wcx_triple: x86_64-pc-windows-msvc
           - name: macOS Apple Silicon
             platform: macos-latest
             args: "--target aarch64-apple-darwin"
+            wcx_triple: aarch64-apple-darwin
           - name: macOS Intel
             platform: macos-latest
             args: "--target x86_64-apple-darwin"
+            wcx_triple: x86_64-apple-darwin
           - name: Linux
             platform: ubuntu-22.04
             args: ""
+            wcx_triple: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.create-release.outputs.tag }}
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wcx sidecar
+        shell: bash
+        run: |
+          if [[ "${{ matrix.wcx_triple }}" == "x86_64-apple-darwin" && "$(uname -m)" == "arm64" ]]; then
+            # Cross-build x86_64 on arm64 macOS via Rosetta
+            arch -x86_64 bash scripts/build-wcx-sidecar.sh "${{ matrix.wcx_triple }}"
+          else
+            bash scripts/build-wcx-sidecar.sh "${{ matrix.wcx_triple }}"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -110,6 +130,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           bun tauri build ${{ matrix.args }}
           $tag = "${{ needs.create-release.outputs.tag }}"
@@ -130,11 +151,12 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           assetNamePattern: "wxmp-cracker-app-[version]-[platform]-[arch][ext]"
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
       - name: Build, sign, notarize, and upload macOS app bundles
         if: matrix.platform == 'macos-latest'
@@ -145,6 +167,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -155,7 +178,7 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           assetNamePattern: "wxmp-cracker-app-[version]-[platform]-[arch][ext]"
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
   publish-release:
     needs: [create-release, build-tauri]

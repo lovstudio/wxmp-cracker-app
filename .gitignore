@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Tauri updater private key
+src-tauri/.tauri-updater-key

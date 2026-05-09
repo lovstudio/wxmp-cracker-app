@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6 - 2026-05-09
+
+### Added
+
+- **Bundled wcx sidecar**: wcx Python CLI is now frozen via PyInstaller and shipped inside the app binary. Users no longer need to install wcx or Python separately.
+- **Auto-update**: the app checks for updates on startup and prompts users to install and restart when a new version is available.
+
+### Changed
+
+- Replaced inline Python scripts with dedicated wcx CLI subcommands (`search-accounts-json`, `fetch-article-content-json`, `fetch-selected-account-json`).
+- `locate_wcx()` now checks the bundled sidecar next to the app binary first, then falls back to system paths.
+
 ## 0.1.5 - 2026-05-09
 
 ### Fixed

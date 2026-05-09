@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    env, fs,
+    env,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -152,12 +152,13 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
 
     tauri::async_runtime::spawn_blocking(move || {
         let wcx = locate_wcx().map_err(|message| CmdError { message })?;
-        let mut cmd = python_command_from_wcx(&wcx).map_err(|message| CmdError { message })?;
-        cmd.arg("-c").arg(SEARCH_ACCOUNTS_PY).arg(&query);
-
-        let output = cmd.output().map_err(|e| CmdError {
-            message: format!("运行 wcx search 失败: {e}"),
-        })?;
+        let output = Command::new(&wcx)
+            .arg("search-accounts-json")
+            .arg(&query)
+            .output()
+            .map_err(|e| CmdError {
+                message: format!("运行 wcx search 失败: {e}"),
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -270,9 +271,8 @@ pub async fn fetch_selected_account(
         let account_json = serde_json::to_string(&account).map_err(|e| CmdError {
             message: format!("序列化公众号选择失败: {e}"),
         })?;
-        let mut cmd = python_command_from_wcx(&wcx).map_err(|message| CmdError { message })?;
-        cmd.arg("-c")
-            .arg(FETCH_SELECTED_ACCOUNT_PY)
+        let mut cmd = Command::new(&wcx);
+        cmd.arg("fetch-selected-account-json")
             .arg(account_json)
             .arg(limit.to_string())
             .arg(if with_content { "1" } else { "0" });
@@ -363,6 +363,14 @@ fn locate_wcx() -> Result<PathBuf, String> {
         candidates.push(PathBuf::from(bin));
     }
 
+    // Bundled sidecar: next to the app binary
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let suffix = if cfg!(windows) { ".exe" } else { "" };
+            candidates.push(dir.join(format!("wcx{suffix}")));
+        }
+    }
+
     if let Some(home) = dirs::home_dir() {
         candidates.push(home.join(".local/bin/wcx"));
     }
@@ -371,12 +379,12 @@ fn locate_wcx() -> Result<PathBuf, String> {
     candidates.push(PathBuf::from("/usr/local/bin/wcx"));
     candidates.push(PathBuf::from("wcx"));
 
-    for candidate in candidates {
+    for candidate in &candidates {
         if matches!(
-            Command::new(&candidate).arg("--version").output(),
+            Command::new(candidate).arg("--version").output(),
             Ok(output) if output.status.success()
         ) {
-            return Ok(resolve_executable(&candidate).unwrap_or(candidate));
+            return Ok(candidate.clone());
         }
     }
 
@@ -384,10 +392,9 @@ fn locate_wcx() -> Result<PathBuf, String> {
 }
 
 fn fetch_single_article_content(wcx: &Path, link: &str) -> Result<ArticleContentPayload, String> {
-    let mut cmd = python_command_from_wcx(wcx)?;
-    cmd.arg("-c").arg(FETCH_ARTICLE_PY).arg(link);
-
-    let output = cmd
+    let output = Command::new(wcx)
+        .arg("fetch-article-content-json")
+        .arg(link)
         .output()
         .map_err(|e| format!("运行 wcx 文章抓取模块失败: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -531,43 +538,6 @@ fn fetch_progress(
     }
 }
 
-fn python_command_from_wcx(wcx: &Path) -> Result<Command, String> {
-    let script = fs::read_to_string(wcx)
-        .map_err(|e| format!("读取 wcx 启动脚本失败，无法定位 Python 环境: {e}"))?;
-    let shebang = script
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("#!"))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .ok_or_else(|| "wcx 启动脚本缺少 Python shebang".to_string())?;
-
-    let mut parts = shebang.split_whitespace();
-    let program = parts
-        .next()
-        .ok_or_else(|| "wcx 启动脚本缺少 Python 可执行文件".to_string())?;
-    let mut cmd = Command::new(program);
-    for arg in parts {
-        cmd.arg(arg);
-    }
-    Ok(cmd)
-}
-
-fn resolve_executable(candidate: &Path) -> Option<PathBuf> {
-    if candidate.components().count() > 1 {
-        return Some(candidate.to_path_buf());
-    }
-
-    let path = env::var_os("PATH")?;
-    for dir in env::split_paths(&path) {
-        let resolved = dir.join(candidate);
-        if resolved.is_file() {
-            return Some(resolved);
-        }
-    }
-    None
-}
-
 fn has_article_body(article: &ArticleDetail) -> bool {
     article
         .content_html
@@ -588,164 +558,3 @@ fn first_nonempty_line(s: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-const FETCH_ARTICLE_PY: &str = r#"
-import json
-import sys
-from wcx.article import extract_content, fetch_article_html
-
-html = fetch_article_html(sys.argv[1])
-inner, md = extract_content(html)
-print(json.dumps({"html": inner, "md": md}, ensure_ascii=False))
-"#;
-
-const SEARCH_ACCOUNTS_PY: &str = r#"
-import json
-import sys
-from wcx import config, fetcher
-
-try:
-    creds = config.load_credentials()
-    if not creds:
-        raise RuntimeError("尚未登录，请先扫码登录")
-    f = fetcher.Fetcher(creds.token, creds.cookie)
-    results = [acc.to_dict() for acc in f.search_biz(sys.argv[1])]
-    print(json.dumps(results, ensure_ascii=False))
-except fetcher.AuthError as e:
-    raise SystemExit(f"认证失败：{e}")
-except fetcher.RateLimitError as e:
-    raise SystemExit(f"触发风控：{e}")
-except Exception as e:
-    raise SystemExit(f"搜索公众号失败：{e}")
-"#;
-
-const FETCH_SELECTED_ACCOUNT_PY: &str = r#"
-import json
-import sys
-import time
-from wcx import article as article_mod
-from wcx import cache, config, fetcher
-
-PROGRESS_PREFIX = "__WXMP_FETCH_PROGRESS__"
-
-def text(value):
-    return value or ""
-
-def emit(stage, status, message, current=None, total=None, title=None):
-    print(PROGRESS_PREFIX + json.dumps({
-        "fakeid": account.fakeid if "account" in globals() else "",
-        "nickname": account.nickname if "account" in globals() else "",
-        "stage": stage,
-        "status": status,
-        "message": message,
-        "current": current,
-        "total": total,
-        "title": title,
-    }, ensure_ascii=False), flush=True)
-
-try:
-    payload = json.loads(sys.argv[1])
-    limit = int(sys.argv[2])
-    with_content = sys.argv[3] == "1"
-    creds = config.load_credentials()
-    if not creds:
-        raise RuntimeError("尚未登录，请先扫码登录")
-
-    account = fetcher.Account(
-        fakeid=text(payload.get("fakeid")).strip(),
-        nickname=text(payload.get("nickname")).strip(),
-        alias=text(payload.get("alias")).strip(),
-        signature=text(payload.get("signature")).strip(),
-        round_head_img=text(payload.get("avatar") or payload.get("round_head_img")).strip(),
-    )
-    if not account.fakeid or not account.nickname:
-        raise RuntimeError("公众号选择缺少 fakeid 或昵称")
-
-    emit("prepare", "done", f"已确认目标公众号：{account.nickname}")
-    f = fetcher.Fetcher(creds.token, creds.cookie)
-    count = 0
-    content_count = 0
-    article_total = limit
-    with cache.connect() as conn:
-        emit("account", "running", "正在写入账号信息")
-        cache.upsert_account(conn, account.to_dict())
-        emit("account", "done", "账号信息已写入本地缓存")
-
-        def on_page(begin, fetched, total):
-            global article_total
-            article_total = min(total, limit) if limit else total
-            emit(
-                "articles",
-                "running",
-                f"已读取第 {begin // 5 + 1} 页文章索引，本页 {fetched} 篇",
-                count,
-                article_total,
-            )
-
-        emit("articles", "running", "正在请求公众号文章索引", 0, article_total)
-        for art in f.iter_all_articles(account.fakeid, max_items=limit, page_size=5):
-            cache.upsert_article(conn, art.to_dict())
-            count += 1
-            emit(
-                "articles",
-                "running",
-                f"已写入 {count}/{article_total} 篇文章索引",
-                count,
-                article_total,
-                art.title,
-            )
-
-        emit("articles", "done", f"文章索引已入库 {count} 篇", count, article_total)
-
-        if with_content:
-            rows = cache.list_articles(conn, account.fakeid, limit=limit)
-            need = [r for r in rows if r["content_md"] is None]
-            emit("content", "running", f"待抓取正文 {len(need)} 篇", 0, len(need))
-            for row in need:
-                try:
-                    emit(
-                        "content",
-                        "running",
-                        f"正在抓取正文 {content_count + 1}/{len(need)}",
-                        content_count,
-                        len(need),
-                        row["title"],
-                    )
-                    html = article_mod.fetch_article_html(row["link"])
-                    inner, md = article_mod.extract_content(html)
-                    cache.set_article_content(conn, row["aid"], inner, md)
-                    content_count += 1
-                    emit(
-                        "content",
-                        "running",
-                        f"正文已写入 {content_count}/{len(need)}",
-                        content_count,
-                        len(need),
-                        row["title"],
-                    )
-                except Exception as e:
-                    emit(
-                        "content",
-                        "warning",
-                        f"正文抓取失败：{e}",
-                        content_count,
-                        len(need),
-                        row["title"],
-                    )
-                    print(f"{row['title']}: {e}", file=sys.stderr)
-                time.sleep(1.0)
-            emit("content", "done", f"正文抓取完成 {content_count}/{len(need)} 篇", content_count, len(need))
-
-    emit("complete", "done", f"已完成：文章索引 {count} 篇，正文 {content_count} 篇", count, count)
-    print(json.dumps({
-        "fakeid": account.fakeid,
-        "nickname": account.nickname,
-        "count": count,
-        "content_count": content_count,
-    }, ensure_ascii=False))
-except fetcher.AuthError as e:
-    raise SystemExit(f"认证失败：{e}")
-except fetcher.RateLimitError as e:
-    raise SystemExit(f"触发风控：{e}")
-except Exception as e:
-    raise SystemExit(f"抓取公众号失败：{e}")
-"#;

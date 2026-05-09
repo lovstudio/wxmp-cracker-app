@@ -1,0 +1,4 @@
+# Sidecar binaries are built by CI or scripts/build-wcx-sidecar.sh
+# Placeholder stubs are created by the dev setup
+*
+!.gitignore

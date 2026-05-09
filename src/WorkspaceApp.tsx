@@ -12,6 +12,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { AuthProvider, useAuth } from "@/hooks/useAuth"
+import { useAutoUpdate } from "@/hooks/useAutoUpdate"
 import { useWxmpGatewayWorker } from "@/hooks/useWxmpGatewayWorker"
 import {
   api,
@@ -163,6 +164,8 @@ function WorkspaceApp() {
     await refreshAccounts()
     setArticleRefreshKey((key) => key + 1)
   }, [refreshAccounts])
+
+  useAutoUpdate()
 
   useWxmpGatewayWorker({
     enabled: Boolean(user && loggedIn),

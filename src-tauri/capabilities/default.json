@@ -10,6 +10,7 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-close",
     "opener:default",
-    "log:default"
+    "log:default",
+    "updater:default"
   ]
 }

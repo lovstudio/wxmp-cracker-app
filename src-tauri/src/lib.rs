@@ -82,6 +82,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(external_navigation_plugin())
         .invoke_handler(tauri::generate_handler![
             greet,
