@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "opener:default",
     "log:default",
-    "updater:default"
+    "updater:default",
+    "process:default"
   ]
 }

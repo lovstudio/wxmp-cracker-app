@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import { check } from "@tauri-apps/plugin-updater"
-import { relaunch } from "@tauri-apps/plugin-updater"
+import { relaunch } from "@tauri-apps/plugin-process"
 import { isTauri } from "@/lib/tauri"
 import { copyableToast as toast } from "@/lib/toast"
 
