@@ -49,6 +49,21 @@ export async function upsertCloudLicense(input: {
   return data
 }
 
+export async function resolveUserIdByEmail(email: string): Promise<string> {
+  const trimmed = email.trim()
+  if (!trimmed) {
+    throw new Error("请输入目标用户的邮箱。")
+  }
+  const { data, error } = await supabase.rpc("resolve_user_id_by_email", {
+    _email: trimmed,
+  })
+  if (error) throw error
+  if (!data) {
+    throw new Error(`未找到邮箱为 ${trimmed} 的 Lovstudio 账号，确认对方已注册。`)
+  }
+  return data as string
+}
+
 export function licenseExpiresAt(kind: LicenseKind) {
   const durationMs = CLOUD_LICENSE_DAYS[kind] * 86_400_000
   return new Date(Date.now() + durationMs).toISOString()

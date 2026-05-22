@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.7 - 2026-05-22
+
+### Fixed
+
+- Fixed macOS Apple Silicon bundled `wcx` startup by signing the PyInstaller sidecar with library-validation entitlements and packaging it through a module entry point.
+- Added release smoke tests for both raw and packaged `wcx` sidecars so broken CLI bundles fail CI before publication.
+
+### Added
+
+- Added admin license assignment by registered Lovstudio account email.
+
 ## 0.1.6 - 2026-05-09
 
 ### Added

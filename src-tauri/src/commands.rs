@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     env,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     thread,
 };
 use tauri::{AppHandle, Emitter};
@@ -379,16 +380,45 @@ fn locate_wcx() -> Result<PathBuf, String> {
     candidates.push(PathBuf::from("/usr/local/bin/wcx"));
     candidates.push(PathBuf::from("wcx"));
 
-    for candidate in &candidates {
-        if matches!(
-            Command::new(candidate).arg("--version").output(),
-            Ok(output) if output.status.success()
-        ) {
-            return Ok(candidate.clone());
+    let mut seen = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for candidate in candidates {
+        if !seen.insert(candidate.clone()) {
+            continue;
+        }
+
+        match Command::new(&candidate).arg("--version").output() {
+            Ok(output) if output.status.success() => return Ok(candidate),
+            Ok(output) => failures.push(format_wcx_failure(&candidate, &output)),
+            Err(e) => failures.push(format!("{}: {e}", candidate.display())),
         }
     }
 
-    Err("未找到 wcx，请先安装并确保 wcx 在 PATH 或 ~/.local/bin/wcx".to_string())
+    if failures.is_empty() {
+        Err("未找到 wcx，请先安装并确保 wcx 在 PATH 或 ~/.local/bin/wcx".to_string())
+    } else {
+        Err(format!(
+            "未找到 wcx 或 wcx 无法启动。已尝试：{}",
+            failures.join("；")
+        ))
+    }
+}
+
+fn format_wcx_failure(candidate: &Path, output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = first_nonempty_line(&stderr).or_else(|| first_nonempty_line(&stdout));
+    let status = output
+        .status
+        .code()
+        .map(|code| format!("退出码 {code}"))
+        .unwrap_or_else(|| output.status.to_string());
+
+    match detail {
+        Some(detail) => format!("{}: {status}, {detail}", candidate.display()),
+        None => format!("{}: {status}", candidate.display()),
+    }
 }
 
 fn fetch_single_article_content(wcx: &Path, link: &str) -> Result<ArticleContentPayload, String> {
@@ -557,4 +587,3 @@ fn first_nonempty_line(s: &str) -> Option<String> {
         .find(|line| !line.is_empty())
         .map(ToOwned::to_owned)
 }
-

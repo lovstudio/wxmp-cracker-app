@@ -1964,3 +1964,24 @@ grant select, insert, update on public.wxmp_gateway_requests to authenticated;
 grant select, insert, update on public.wxmp_provider_leases to authenticated;
 grant select, insert on public.wxmp_provider_health_events to authenticated;
 grant select, insert, update on public.wxmp_gateway_alerts to authenticated;
+
+create or replace function public.resolve_user_id_by_email(_email text)
+returns uuid
+language sql
+security definer
+set search_path = public
+as $$
+  select u.id
+  from auth.users u
+  where lower(u.email) = lower(btrim(_email))
+    and exists (
+      select 1
+      from public.user_roles
+      where user_roles.user_id = auth.uid()
+        and user_roles.role = 'admin'
+    )
+  limit 1;
+$$;
+
+revoke all on function public.resolve_user_id_by_email(text) from public;
+grant execute on function public.resolve_user_id_by_email(text) to authenticated;

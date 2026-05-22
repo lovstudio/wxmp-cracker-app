@@ -612,6 +612,12 @@ export type Database = {
         }
         Returns: boolean
       }
+      resolve_user_id_by_email: {
+        Args: {
+          _email: string
+        }
+        Returns: string
+      }
     }
     Enums: {
       app_role: "admin" | "user"

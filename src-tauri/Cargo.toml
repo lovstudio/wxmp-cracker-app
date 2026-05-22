@@ -1,6 +1,6 @@
 [package]
 name = "wxmp-cracker"
-version = "0.1.6"
+version = "0.1.7"
 description = "微探：微信公众号内容采集与洞察工作台，Powered by Lovstudio"
 authors = ["lovstudio"]
 edition = "2021"

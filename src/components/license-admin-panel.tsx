@@ -31,6 +31,7 @@ import { useAuth } from "@/hooks/useAuth"
 import type { LicenseKind } from "@/lib/api"
 import {
   CLOUD_LICENSE_DAYS,
+  resolveUserIdByEmail,
   upsertCloudLicense,
   type CloudLicense,
 } from "@/lib/cloud-license"
@@ -111,6 +112,8 @@ export function LicenseAdminPanel({
   const { isActualAdmin, isLoading, profile, signIn, signOut, user } = useAuth()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [targetMode, setTargetMode] = useState<"email" | "uid">("email")
+  const [targetEmail, setTargetEmail] = useState("")
   const [targetAccountId, setTargetAccountId] = useState(
     defaultTargetAccountId ?? ""
   )
@@ -130,6 +133,7 @@ export function LicenseAdminPanel({
   useEffect(() => {
     if (defaultTargetAccountId && !targetAccountId.trim()) {
       setTargetAccountId(defaultTargetAccountId)
+      setTargetMode("uid")
     }
   }, [defaultTargetAccountId, targetAccountId])
 
@@ -190,8 +194,15 @@ export function LicenseAdminPanel({
 
     try {
       const normalizedQuotaLevel = parseNonNegativeInt(quotaLevel, "账号级别")
+      const resolvedAccountId =
+        targetMode === "email"
+          ? await resolveUserIdByEmail(targetEmail)
+          : targetAccountId.trim()
+      if (!resolvedAccountId) {
+        throw new Error("请输入目标用户的邮箱或账号 ID。")
+      }
       const license = await upsertCloudLicense({
-        accountId: targetAccountId,
+        accountId: resolvedAccountId,
         kind,
         quotaLevel: normalizedQuotaLevel,
         customer,
@@ -328,16 +339,62 @@ export function LicenseAdminPanel({
       </div>
       <form className="grid gap-4" onSubmit={submitAuthorization}>
         <div className="grid gap-2">
-          <Label htmlFor="license-target-account">目标 Lovstudio 用户 ID</Label>
-          <Input
-            id="license-target-account"
-            className="font-mono text-sm"
-            disabled={busy}
-            onChange={(event) => setTargetAccountId(event.target.value)}
-            placeholder="Supabase user.id"
-            spellCheck={false}
-            value={targetAccountId}
-          />
+          <div className="flex items-center justify-between">
+            <Label>目标 Lovstudio 账号</Label>
+            <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
+              <button
+                className={`px-2 py-0.5 transition ${
+                  targetMode === "email"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:bg-muted"
+                }`}
+                disabled={busy}
+                onClick={() => setTargetMode("email")}
+                type="button"
+              >
+                邮箱
+              </button>
+              <button
+                className={`px-2 py-0.5 transition ${
+                  targetMode === "uid"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:bg-muted"
+                }`}
+                disabled={busy}
+                onClick={() => setTargetMode("uid")}
+                type="button"
+              >
+                用户 ID
+              </button>
+            </div>
+          </div>
+          {targetMode === "email" ? (
+            <Input
+              id="license-target-email"
+              autoComplete="off"
+              disabled={busy}
+              onChange={(event) => setTargetEmail(event.target.value)}
+              placeholder="customer@example.com"
+              spellCheck={false}
+              type="email"
+              value={targetEmail}
+            />
+          ) : (
+            <Input
+              id="license-target-account"
+              className="font-mono text-sm"
+              disabled={busy}
+              onChange={(event) => setTargetAccountId(event.target.value)}
+              placeholder="Supabase user.id"
+              spellCheck={false}
+              value={targetAccountId}
+            />
+          )}
+          <p className="text-xs text-muted-foreground">
+            {targetMode === "email"
+              ? "需对方已用此邮箱注册过 Lovstudio 账号。"
+              : "Supabase auth.users.id（UUID）。"}
+          </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_112px]">
           <div className="grid gap-2">
@@ -382,7 +439,15 @@ export function LicenseAdminPanel({
             value={customer}
           />
         </div>
-        <Button disabled={busy || !targetAccountId.trim()} type="submit">
+        <Button
+          disabled={
+            busy ||
+            (targetMode === "email"
+              ? !targetEmail.trim()
+              : !targetAccountId.trim())
+          }
+          type="submit"
+        >
           {busy ? (
             <Loader2Icon className="size-4 animate-spin" />
           ) : (
