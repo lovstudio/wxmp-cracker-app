@@ -24,12 +24,15 @@ import {
   TerminalSquare,
   type LucideIcon,
 } from "lucide-react"
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const SITE_URL = "https://wxmp.lovstudio.ai"
-const LATEST_VERSION = "0.1.6"
-const RELEASE_DATE = "2026-05-09"
+const FALLBACK_RELEASE_INFO: ReleaseInfo = {
+  version: "0.1.8",
+  releaseDate: "2026-05-22",
+  url: "https://github.com/lovstudio/wxmp-cracker-app/releases/latest",
+}
 
 type IconBlock = {
   icon: LucideIcon
@@ -52,6 +55,20 @@ type DownloadPlatform = {
   meta: string
   note: string
   files: DownloadFile[]
+}
+
+type ReleaseInfo = {
+  version: string
+  releaseDate: string
+  url: string
+}
+
+type ReleaseApiResponse = {
+  version?: string
+  tagName?: string
+  releaseDate?: string
+  publishedAt?: string
+  url?: string
 }
 
 const featureBlocks: IconBlock[] = [
@@ -179,17 +196,22 @@ const docSections = [
 
 export function Website() {
   const isDocs = normalizedPathname() === "/docs"
+  const release = useLatestReleaseInfo()
 
   return (
     <div className="site-page">
       <SiteHeader active={isDocs ? "docs" : "home"} />
-      {isDocs ? <DocsPage /> : <LandingPage />}
+      {isDocs ? (
+        <DocsPage release={release} />
+      ) : (
+        <LandingPage release={release} />
+      )}
       <SiteFooter />
     </div>
   )
 }
 
-function LandingPage() {
+function LandingPage({ release }: { release: ReleaseInfo }) {
   return (
     <>
       <section className="site-hero" id="top">
@@ -201,7 +223,8 @@ function LandingPage() {
           </div>
           <h1 className="site-hero-title">微探</h1>
           <p className="site-hero-copy">
-            把分散在微信公众号后台、wcx 缓存和本地文章库里的内容，整理成一个可阅读、可续采、可分析的桌面研究台。
+            把分散在微信公众号后台、wcx
+            缓存和本地文章库里的内容，整理成一个可阅读、可续采、可分析的桌面研究台。
           </p>
           <div className="site-action-row" aria-label="主要操作">
             <a className="site-button site-button-primary" href="#download">
@@ -214,8 +237,8 @@ function LandingPage() {
             </a>
           </div>
           <div className="site-hero-facts" aria-label="版本信息">
-            <span>v{LATEST_VERSION}</span>
-            <span>{RELEASE_DATE}</span>
+            <span>v{release.version}</span>
+            <span>{release.releaseDate}</span>
             <span>macOS · Windows · Linux</span>
           </div>
         </div>
@@ -273,7 +296,8 @@ function LandingPage() {
             <p className="site-section-eyebrow">Docs</p>
             <h2>文档已经放在官网里</h2>
             <p>
-              安装、登录、采集、本机缓存位置和版本说明都可以从这里进入，不需要翻 README。
+              安装、登录、采集、本机缓存位置和版本说明都可以从这里进入，不需要翻
+              README。
             </p>
           </div>
           <div className="site-doc-strip">
@@ -310,7 +334,9 @@ function LandingPage() {
             </p>
             <div className="site-download-version">
               <PackageCheck className="site-icon" aria-hidden="true" />
-              v{LATEST_VERSION} · {RELEASE_DATE}
+              <span>
+                v{release.version} · {release.releaseDate}
+              </span>
             </div>
           </div>
           <DownloadTabs />
@@ -320,7 +346,7 @@ function LandingPage() {
   )
 }
 
-function DocsPage() {
+function DocsPage({ release }: { release: ReleaseInfo }) {
   return (
     <main className="site-docs-page">
       <div className="site-container site-docs-layout">
@@ -346,26 +372,37 @@ function DocsPage() {
 
           <DocBlock id="install" icon={Download} title="安装">
             <p>
-              在官网首页下载区切换平台标签，直接选择安装包。macOS 用户通常选择对应芯片的
-              dmg，Windows 用户选择 x64 zip，Linux 用户选择 AppImage 或 deb。
+              在官网首页下载区切换平台标签，直接选择安装包。macOS
+              用户通常选择对应芯片的 dmg，Windows 用户选择 x64 zip，Linux
+              用户选择 AppImage 或 deb。
             </p>
             <DownloadTabs compact />
             <ul>
-              <li>macOS 发布包从 v0.1.1 起接入 Apple Developer ID 签名和公证。</li>
-              <li>首次启动后，桌面端会读取本机 wcx 缓存；没有缓存也可以先扫码登录再采集。</li>
-              <li>开发者本地运行使用 <code>bun run tauri dev</code>。</li>
+              <li>
+                macOS 发布包从 v0.1.1 起接入 Apple Developer ID 签名和公证。
+              </li>
+              <li>
+                首次启动后，桌面端会读取本机 wcx
+                缓存；没有缓存也可以先扫码登录再采集。
+              </li>
+              <li>
+                开发者本地运行使用 <code>bun run tauri dev</code>。
+              </li>
             </ul>
           </DocBlock>
 
           <DocBlock id="login" icon={ShieldCheck} title="登录与授权">
             <p>
-              微探有两类登录：Lovstudio 账号用于授权、试用和配额同步；微信公众号登录用于获取公众号后台采集能力。
+              微探有两类登录：Lovstudio
+              账号用于授权、试用和配额同步；微信公众号登录用于获取公众号后台采集能力。
             </p>
             <ol>
               <li>打开微探后先登录 Lovstudio 账号。</li>
               <li>点击扫码登录微信公众号，桌面端会打开内嵌登录窗口。</li>
               <li>手机扫码确认后，微探会捕获必要 cookie 并写入 wcx 配置。</li>
-              <li>需要正式能力时，在激活窗口输入绑定当前 Lovstudio 账号的激活码。</li>
+              <li>
+                需要正式能力时，在激活窗口输入绑定当前 Lovstudio 账号的激活码。
+              </li>
             </ol>
           </DocBlock>
 
@@ -406,9 +443,12 @@ function DocsPage() {
 
           <DocBlock id="release" icon={Clock3} title="版本">
             <p>
-              当前官网展示版本为 v{LATEST_VERSION}，发布日期 {RELEASE_DATE}。
-              v0.1.6 内置 wcx 运行环境并加入应用自动更新，用户无需手动安装
-              Python 或 wcx。
+              当前官网展示版本来自{" "}
+              <a href={release.url} target="_blank" rel="noreferrer">
+                GitHub Release
+              </a>
+              ：v{release.version}，发布日期 {release.releaseDate}。发布包内置
+              wcx 运行环境并加入应用自动更新，用户无需手动安装 Python 或 wcx。
             </p>
             <a className="site-button site-button-ghost" href="/#download">
               <Download className="site-icon" aria-hidden="true" />
@@ -491,14 +531,16 @@ function ProductBackdrop() {
               <span>文章队列</span>
               <span>同步中</span>
             </div>
-            {["模型供给的真实边界", "内容团队的周报系统", "从公开资料构建洞察"].map(
-              (title) => (
-                <div className="site-window-article" key={title}>
-                  <Newspaper />
-                  <span>{title}</span>
-                </div>
-              )
-            )}
+            {[
+              "模型供给的真实边界",
+              "内容团队的周报系统",
+              "从公开资料构建洞察",
+            ].map((title) => (
+              <div className="site-window-article" key={title}>
+                <Newspaper />
+                <span>{title}</span>
+              </div>
+            ))}
           </div>
           <div className="site-window-detail">
             <div className="site-window-doc-title">公众号资料库</div>
@@ -564,7 +606,10 @@ function DownloadTabs({ compact = false }: { compact?: boolean }) {
         >
           <article className="site-download-panel">
             <div className="site-download-panel-head">
-              <platform.icon className="site-download-icon" aria-hidden="true" />
+              <platform.icon
+                className="site-download-icon"
+                aria-hidden="true"
+              />
               <div>
                 <h3>{platform.title}</h3>
                 <p>{platform.meta}</p>
@@ -637,6 +682,71 @@ function DocBlock({
       {children}
     </section>
   )
+}
+
+function useLatestReleaseInfo() {
+  const [release, setRelease] = useState<ReleaseInfo>(FALLBACK_RELEASE_INFO)
+
+  useEffect(() => {
+    let ignore = false
+    const controller = new AbortController()
+
+    async function loadRelease() {
+      try {
+        const response = await fetch("/api/release", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        })
+
+        if (!response.ok) return
+
+        const data = (await response.json()) as ReleaseApiResponse
+        const version = normalizeReleaseVersion(data.version ?? data.tagName)
+        const releaseDate = normalizeReleaseDate(
+          data.releaseDate ?? data.publishedAt
+        )
+
+        if (!version || !releaseDate || ignore) return
+
+        setRelease({
+          version,
+          releaseDate,
+          url: data.url ?? FALLBACK_RELEASE_INFO.url,
+        })
+      } catch (error) {
+        if (!ignore && !isAbortError(error)) {
+          setRelease(FALLBACK_RELEASE_INFO)
+        }
+      }
+    }
+
+    loadRelease()
+
+    return () => {
+      ignore = true
+      controller.abort()
+    }
+  }, [])
+
+  return release
+}
+
+function normalizeReleaseVersion(value?: string) {
+  return value?.replace(/^v/i, "")
+}
+
+function normalizeReleaseDate(value?: string) {
+  if (!value) return undefined
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return undefined
+
+  return date.toISOString().slice(0, 10)
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 function normalizedPathname() {

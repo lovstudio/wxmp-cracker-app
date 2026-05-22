@@ -1,12 +1,27 @@
 const REPO = "lovstudio/wxmp-cracker-app"
 
 const ASSET_PATTERNS = {
-  "macos-arm64": { suffix: "-darwin-aarch64.dmg", contentType: "application/x-apple-diskimage" },
-  "macos-x64": { suffix: "-darwin-x64.dmg", contentType: "application/x-apple-diskimage" },
+  "macos-arm64": {
+    suffix: "-darwin-aarch64.dmg",
+    contentType: "application/x-apple-diskimage",
+  },
+  "macos-x64": {
+    suffix: "-darwin-x64.dmg",
+    contentType: "application/x-apple-diskimage",
+  },
   "windows-x64": { suffix: "-windows-x64.zip", contentType: "application/zip" },
-  "linux-appimage": { suffix: "-linux-amd64.AppImage", contentType: "application/octet-stream" },
-  "linux-deb": { suffix: "-linux-amd64.deb", contentType: "application/vnd.debian.binary-package" },
-  "linux-rpm": { suffix: "-linux-x86_64.rpm", contentType: "application/x-rpm" },
+  "linux-appimage": {
+    suffix: "-linux-amd64.AppImage",
+    contentType: "application/octet-stream",
+  },
+  "linux-deb": {
+    suffix: "-linux-amd64.deb",
+    contentType: "application/vnd.debian.binary-package",
+  },
+  "linux-rpm": {
+    suffix: "-linux-x86_64.rpm",
+    contentType: "application/x-rpm",
+  },
 }
 
 let _cachedRelease = null
@@ -14,7 +29,8 @@ let _cachedAt = 0
 const CACHE_TTL = 5 * 60 * 1000
 
 async function getLatestRelease(token) {
-  if (_cachedRelease && Date.now() - _cachedAt < CACHE_TTL) return _cachedRelease
+  if (_cachedRelease && Date.now() - _cachedAt < CACHE_TTL)
+    return _cachedRelease
   _cachedRelease = await fetchJson(
     `https://api.github.com/repos/${REPO}/releases/latest`,
     token
@@ -39,7 +55,9 @@ export default async function handler(request, response) {
 
   try {
     const release = await getLatestRelease(token)
-    const asset = release.assets?.find((item) => item.name.endsWith(pattern.suffix))
+    const asset = release.assets?.find((item) =>
+      item.name.endsWith(pattern.suffix)
+    )
 
     if (!asset) {
       response.status(404).json({ error: "Download asset was not found." })
@@ -110,12 +128,15 @@ async function fetchJson(url, token) {
 }
 
 function githubHeaders(token, accept) {
-  return {
+  const headers = {
     Accept: accept,
-    Authorization: `Bearer ${token}`,
     "User-Agent": "wxmp-lovstudio-download",
     "X-GitHub-Api-Version": "2022-11-28",
   }
+
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  return headers
 }
 
 function attachmentHeader(assetName) {
