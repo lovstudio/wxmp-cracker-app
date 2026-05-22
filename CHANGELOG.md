@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - 2026-05-22
+
+### Fixed
+
+- Enabled Tauri updater artifact generation so CI publishes signed update bundles and `latest.json`.
+
 ## 0.1.7 - 2026-05-22
 
 ### Fixed
