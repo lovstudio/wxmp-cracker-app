@@ -3,6 +3,9 @@ import type { Tables, TablesInsert } from "@/integrations/supabase/types"
 import type { LicenseKind } from "@/lib/api"
 
 export type CloudLicense = Tables<"wxmp_licenses">
+export type CloudLicenseWithAccount = CloudLicense & {
+  account_email: string | null
+}
 
 export const CLOUD_LICENSE_DAYS: Record<LicenseKind, number> = {
   trial: 7,
@@ -49,6 +52,28 @@ export async function upsertCloudLicense(input: {
   return data
 }
 
+export async function listCloudLicenses(
+  limit?: number
+): Promise<CloudLicenseWithAccount[]> {
+  const query = supabase
+    .from("wxmp_licenses")
+    .select("*")
+    .order("updated_at", { ascending: false })
+  const { data, error } =
+    typeof limit === "number" ? await query.limit(limit) : await query
+
+  if (error) throw error
+  const licenses = data ?? []
+  const emailByAccountId = await fetchProfileEmails(
+    licenses.map((license) => license.account_id)
+  )
+
+  return licenses.map((license) => ({
+    ...license,
+    account_email: emailByAccountId.get(license.account_id) ?? null,
+  }))
+}
+
 export async function resolveUserIdByEmail(email: string): Promise<string> {
   const trimmed = email.trim()
   if (!trimmed) {
@@ -80,4 +105,31 @@ function normalizeQuotaLevel(value?: number) {
     throw new Error("账号级别必须是大于等于 0 的整数。")
   }
   return Math.floor(value)
+}
+
+async function fetchProfileEmails(accountIds: string[]) {
+  const uniqueAccountIds = Array.from(new Set(accountIds.filter(Boolean)))
+  const emailByAccountId = new Map<string, string>()
+
+  if (uniqueAccountIds.length === 0) {
+    return emailByAccountId
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,email")
+    .in("id", uniqueAccountIds)
+
+  if (error) {
+    console.warn("Unable to load license account emails", error)
+    return emailByAccountId
+  }
+
+  for (const profile of data ?? []) {
+    if (profile.email) {
+      emailByAccountId.set(profile.id, profile.email)
+    }
+  }
+
+  return emailByAccountId
 }

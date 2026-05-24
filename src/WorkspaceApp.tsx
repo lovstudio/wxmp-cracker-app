@@ -458,6 +458,7 @@ function WorkspaceApp() {
             <TopBar
               activeTab={activeTab}
               onOpenLicenseAdmin={() => setLicenseAdminOpen(true)}
+              onOpenLovstudioLogin={() => setLovstudioAuthOpen(true)}
               onTabChange={setActiveTab}
             />
             <div

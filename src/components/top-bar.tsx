@@ -6,6 +6,7 @@ import {
   GaugeIcon,
   InfoIcon,
   Loader2Icon,
+  LogInIcon,
   MoonIcon,
   NetworkIcon,
   PenLineIcon,
@@ -14,7 +15,6 @@ import {
   Table2Icon,
 } from "lucide-react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -48,6 +48,7 @@ export type WorkspaceTabId =
 interface TopBarProps {
   activeTab: WorkspaceTabId
   onOpenLicenseAdmin: () => void
+  onOpenLovstudioLogin: () => void
   onTabChange: (tab: WorkspaceTabId) => void
 }
 
@@ -68,8 +69,10 @@ const workspaceTabs = [
 export function TopBar({
   activeTab,
   onOpenLicenseAdmin,
+  onOpenLovstudioLogin,
   onTabChange,
 }: TopBarProps) {
+  const { isLoading: authLoading, user } = useAuth()
   const { theme, setTheme } = useTheme()
   const isDark = theme === "dark"
   const nextTheme = isDark ? "light" : "dark"
@@ -77,8 +80,7 @@ export function TopBar({
   return (
     <header className="top-bar sticky top-0 z-10 flex h-(--header-height) shrink-0 items-center gap-3 border-b border-border/70 px-4 backdrop-blur-xl">
       <SidebarTrigger className="-ml-1 border border-border/70 bg-card/70 text-foreground shadow-sm" />
-      <Separator orientation="vertical" className="h-5 bg-border/70" />
-      <nav className="workspace-tab-nav min-w-0 flex-1" aria-label="账号工作区">
+      <nav className="workspace-tab-nav min-w-0" aria-label="账号工作区">
         <div className="workspace-tab-list" role="tablist">
           {workspaceTabs.map((tab) => {
             const Icon = tab.icon
@@ -101,43 +103,62 @@ export function TopBar({
           })}
         </div>
       </nav>
-      <ResourceConditions />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="打开授权与频率管理"
-            className="border-border/70 bg-card/70 text-foreground shadow-sm"
-            onClick={onOpenLicenseAdmin}
-          >
-            <ShieldCheckIcon className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">授权与频率管理</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label={isDark ? "切换浅色主题" : "切换深色主题"}
-            className="border-border/70 bg-card/70 text-foreground shadow-sm"
-            onClick={() => setTheme(nextTheme)}
-          >
-            {isDark ? (
-              <SunIcon className="size-4" />
-            ) : (
-              <MoonIcon className="size-4" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {isDark ? "切换浅色主题" : "切换深色主题"}
-        </TooltipContent>
-      </Tooltip>
+      {user ? (
+        <div className="ml-auto flex items-center gap-3">
+          <ResourceConditions />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                aria-label="打开授权与额度管理"
+                className="border-border/70 bg-card/70 text-foreground shadow-sm"
+                onClick={onOpenLicenseAdmin}
+              >
+                <ShieldCheckIcon className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">授权与额度管理</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                aria-label={isDark ? "切换浅色主题" : "切换深色主题"}
+                className="border-border/70 bg-card/70 text-foreground shadow-sm"
+                onClick={() => setTheme(nextTheme)}
+              >
+                {isDark ? (
+                  <SunIcon className="size-4" />
+                ) : (
+                  <MoonIcon className="size-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isDark ? "切换浅色主题" : "切换深色主题"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          className="ml-auto shadow-sm"
+          disabled={authLoading}
+          onClick={onOpenLovstudioLogin}
+        >
+          {authLoading ? (
+            <Loader2Icon className="size-4 animate-spin" />
+          ) : (
+            <LogInIcon className="size-4" />
+          )}
+          登录
+        </Button>
+      )}
     </header>
   )
 }
@@ -210,18 +231,7 @@ function ResourceConditions() {
     }
   }, [refresh])
 
-  if (!user) {
-    return (
-      <div className="hidden items-center gap-2 lg:flex">
-        <ResourcePill
-          icon={ShieldCheckIcon}
-          label="资源"
-          value="未登录"
-          detail="登录 Lovstudio 后显示当前可用频率、节点与队列资源。"
-        />
-      </div>
-    )
-  }
+  if (!user) return null
 
   return (
     <div className="hidden min-w-0 items-center gap-2 lg:flex">
