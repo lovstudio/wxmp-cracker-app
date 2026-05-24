@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.9 - 2026-05-24
+
+### Added
+
+- Added a Lovstudio login-only top bar state for signed-out users.
+- Added an authorized-account summary and detailed account list in license administration.
+
+### Changed
+
+- Split authorization and quota controls into separate tabs in the admin dialog.
+- Improved authorized-account labels to prefer user email, with explicit notes and account IDs.
+- Renamed frequency-management copy to quota-management copy for clearer admin wording.
+
 ## 0.1.8 - 2026-05-22
 
 ### Fixed
