@@ -228,9 +228,9 @@ function WorkspaceApp() {
 
     if (!loggedIn) {
       toast.wxmpError("请先扫码登录微信公众号", api.openLogin)
-      api.openLogin().catch((e) =>
-        toast.wxmpError(errorMessage(e), api.openLogin)
-      )
+      api
+        .openLogin()
+        .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
       return
     }
     setFetchProgressEvents([])
@@ -438,9 +438,9 @@ function WorkspaceApp() {
             onLovstudioLogin={() => setLovstudioAuthOpen(true)}
             onLovstudioLogout={() => void signOutLovstudio()}
             onLogin={() => {
-              api.openLogin().catch((e) =>
-                toast.wxmpError(errorMessage(e), api.openLogin)
-              )
+              api
+                .openLogin()
+                .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
             }}
             onSelect={(id) => {
               setActiveFakeid(id)
@@ -474,11 +474,16 @@ function WorkspaceApp() {
               {activeTab === "reader" ? (
                 <>
                   <ArticleList
+                    account={activeAccount}
                     fakeid={selectedFakeid}
                     activeAid={activeAid}
                     refreshKey={articleRefreshKey}
                     onSelect={setActiveAid}
                     onContentFetched={() => {
+                      setArticleRefreshKey((key) => key + 1)
+                    }}
+                    onCollectionUpdated={() => {
+                      refreshAccounts()
                       setArticleRefreshKey((key) => key + 1)
                     }}
                   />

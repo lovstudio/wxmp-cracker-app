@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
+  AlertCircleIcon,
   CalendarIcon,
   CheckCircle2Icon,
+  CircleIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
@@ -9,24 +11,37 @@ import {
   FileX2Icon,
   LinkIcon,
   LoaderCircleIcon,
+  PlayCircleIcon,
   SearchIcon,
+  XIcon,
 } from "lucide-react"
 import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { api, type ArticleMatchField, type ArticleSummary } from "@/lib/api"
+import {
+  api,
+  onFetchAccountProgress,
+  type Account,
+  type AccountSearchResult,
+  type ArticleMatchField,
+  type ArticleSummary,
+  type FetchAccountProgress,
+} from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
 import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface Props {
+  account?: Account | null
   fakeid: string | null
   activeAid: string | null
   refreshKey?: number
   onSelect: (aid: string) => void
   onContentFetched?: (aid: string) => void
+  onCollectionUpdated?: () => void
 }
 
 interface ArticleMenuState {
@@ -35,15 +50,28 @@ interface ArticleMenuState {
   y: number
 }
 
+type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
+
+const MAX_RESUME_PROGRESS_EVENTS = 24
+const RESUME_BATCH_SIZE = 20
+const MAX_RESUME_LIMIT = 500
+
 export function ArticleList({
+  account,
   fakeid,
   activeAid,
   refreshKey = 0,
   onSelect,
   onContentFetched,
+  onCollectionUpdated,
 }: Props) {
   const [items, setItems] = useState<ArticleSummary[]>([])
   const [loading, setLoading] = useState(false)
+  const [resuming, setResuming] = useState(false)
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
+  const [resumeProgressEvents, setResumeProgressEvents] = useState<
+    FetchAccountProgress[]
+  >([])
   const [q, setQ] = useState("")
   const [menu, setMenu] = useState<ArticleMenuState | null>(null)
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
@@ -52,6 +80,8 @@ export function ArticleList({
   const [searchedQuery, setSearchedQuery] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
   const [contentSearchVersion, setContentSearchVersion] = useState(0)
+  const selectedAccount = account?.fakeid === fakeid ? account : null
+  const resumeActiveRef = useRef(false)
 
   useEffect(() => {
     if (!menu) return
@@ -94,6 +124,28 @@ export function ArticleList({
       cancelled = true
     }
   }, [fakeid, refreshKey])
+
+  useEffect(() => {
+    if (!selectedAccount) return
+
+    let active = true
+    const progressFakeid = selectedAccount.fakeid
+    const progress = onFetchAccountProgress((event) => {
+      if (
+        !active ||
+        !resumeActiveRef.current ||
+        event.fakeid !== progressFakeid
+      ) {
+        return
+      }
+      setResumeProgressEvents((current) => appendProgressEvent(current, event))
+    })
+
+    return () => {
+      active = false
+      progress.then((unlisten) => unlisten())
+    }
+  }, [selectedAccount])
 
   const trimmedQuery = q.trim()
 
@@ -150,6 +202,13 @@ export function ArticleList({
     trimmedQuery && searchedQuery === trimmedQuery && !searchError
       ? searchItems
       : localFiltered
+  const nextResumeLimit = nextResumeTarget(items.length)
+  const collectionBusy = Boolean(fetchingAid) || resuming
+  const canResume =
+    Boolean(selectedAccount) &&
+    !loading &&
+    !collectionBusy &&
+    items.length < MAX_RESUME_LIMIT
 
   const cachedCount = useMemo(
     () => items.filter((item) => item.has_content).length,
@@ -157,7 +216,7 @@ export function ArticleList({
   )
 
   const fetchArticleContent = async (article: ArticleSummary) => {
-    if (fetchingAid) return
+    if (collectionBusy) return
 
     setFetchingAid(article.aid)
     toast.info(article.has_content ? "正在重新抓取正文" : "正在抓取正文")
@@ -193,26 +252,106 @@ export function ArticleList({
     }
   }
 
+  const resumeCollection = async () => {
+    if (!selectedAccount || !canResume) return
+
+    const initialCount = items.length
+    const startEvent = initialResumeProgress(selectedAccount, nextResumeLimit)
+    resumeActiveRef.current = true
+    setResumeProgressEvents([startEvent])
+    setResumeDialogOpen(true)
+    setResuming(true)
+    toast.info(
+      `正在续抓 ${selectedAccount.nickname}，目标索引 ${nextResumeLimit} 篇`
+    )
+    try {
+      await api.fetchSelectedAccount(
+        accountToSearchResult(selectedAccount),
+        nextResumeLimit,
+        false
+      )
+      const updatedItems = await api.listArticles(selectedAccount.fakeid)
+      const sortedItems = [...updatedItems].sort(
+        (a, b) => b.create_time - a.create_time
+      )
+      setItems(sortedItems)
+      setContentSearchVersion((current) => current + 1)
+      onCollectionUpdated?.()
+      const addedCount = sortedItems.length - initialCount
+      const successMessage =
+        addedCount > 0
+          ? `续抓完成，新增 ${addedCount} 篇索引`
+          : "续抓完成，当前没有新增文章"
+      setResumeProgressEvents((current) =>
+        appendProgressEvent(current, {
+          fakeid: selectedAccount.fakeid,
+          nickname: selectedAccount.nickname,
+          stage: "complete",
+          status: "done",
+          message: successMessage,
+          current: nextResumeLimit,
+          total: nextResumeLimit,
+          title: null,
+        })
+      )
+      toast.success(successMessage)
+    } catch (error) {
+      const message = errorMessage(error)
+      setResumeProgressEvents((current) =>
+        appendProgressEvent(current, {
+          fakeid: selectedAccount.fakeid,
+          nickname: selectedAccount.nickname,
+          stage: "error",
+          status: "error",
+          message,
+          current: null,
+          total: nextResumeLimit,
+          title: null,
+        })
+      )
+      toast.wxmpError(message, api.openLogin)
+    } finally {
+      resumeActiveRef.current = false
+      setResuming(false)
+    }
+  }
+
   return (
     <aside className="article-list-panel flex h-full min-h-0 w-[min(420px,100%)] max-w-full shrink-0 flex-col overflow-hidden">
-      <div className="border-b border-border/70 px-4 py-4">
-        <div className="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <div className="font-heading text-2xl leading-none font-semibold">
+      <div className="border-b border-border/70 px-4 py-3">
+        <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-heading text-xl leading-tight font-semibold text-foreground">
               文章索引
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
               {fakeid
                 ? `${filtered.length.toLocaleString()} / ${items.length.toLocaleString()} 篇`
                 : "未选择公众号"}
+              {fakeid && (
+                <>
+                  <span className="text-border">/</span>
+                  <span>{cachedCount.toLocaleString()} 篇正文</span>
+                </>
+              )}
             </div>
           </div>
-          <div className="rounded-md border border-border/70 bg-muted/50 px-2.5 py-1.5 text-right">
-            <div className="font-mono text-sm leading-none text-foreground">
-              {cachedCount.toLocaleString()}
-            </div>
-            <div className="mt-1 text-[10px] text-muted-foreground">已抓取</div>
-          </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="mt-0.5 h-7 rounded-lg px-2.5"
+            disabled={!canResume}
+            title={`续抓到 ${nextResumeLimit} 篇索引`}
+            onClick={() => void resumeCollection()}
+          >
+            {resuming ? (
+              <LoaderCircleIcon className="size-3.5 animate-spin" />
+            ) : (
+              <PlayCircleIcon className="size-3.5" />
+            )}
+            {resuming ? "续抓中" : "续抓"}
+          </Button>
         </div>
         <div className="search-shell relative rounded-lg">
           <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -365,13 +504,339 @@ export function ArticleList({
         <ArticleContextMenu
           menu={menu}
           fetchingAid={fetchingAid}
+          busy={collectionBusy}
           onClose={() => setMenu(null)}
           onSelect={() => onSelect(menu.article.aid)}
           onFetchContent={fetchArticleContent}
         />
       )}
+      {resumeDialogOpen && selectedAccount ? (
+        <ResumeProgressDialog
+          account={selectedAccount}
+          busy={resuming}
+          events={resumeProgressEvents}
+          limit={nextResumeLimit}
+          onClose={() => setResumeDialogOpen(false)}
+        />
+      ) : null}
     </aside>
   )
+}
+
+function ResumeProgressDialog({
+  account,
+  busy,
+  events,
+  limit,
+  onClose,
+}: {
+  account: Account
+  busy: boolean
+  events: FetchAccountProgress[]
+  limit: number
+  onClose: () => void
+}) {
+  const visibleEvents =
+    events.length > 0 ? events : [initialResumeProgress(account, limit)]
+  const latest = visibleEvents[visibleEvents.length - 1]
+  const progressEvent =
+    [...visibleEvents]
+      .reverse()
+      .find(
+        (event) =>
+          typeof event.current === "number" &&
+          typeof event.total === "number" &&
+          event.total > 0
+      ) ?? latest
+  const current =
+    typeof progressEvent.current === "number" ? progressEvent.current : 0
+  const total =
+    typeof progressEvent.total === "number" && progressEvent.total > 0
+      ? progressEvent.total
+      : limit
+  const progressPercent =
+    total > 0 ? Math.min(Math.max((current / total) * 100, 0), 100) : 0
+  const recentEvents = visibleEvents.slice(-7)
+
+  const closeIfIdle = () => {
+    if (!busy) onClose()
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 px-4 backdrop-blur-sm"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeIfIdle()
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-progress-title"
+        className="dialog-panel w-full max-w-[560px] rounded-xl p-4 text-card-foreground shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div
+              id="resume-progress-title"
+              className="font-heading text-lg leading-tight font-semibold"
+            >
+              续抓文章索引
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {account.nickname} · 目标 {limit.toLocaleString()} 篇
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-8"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <XIcon className="size-4" />
+          </Button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-border/70 bg-muted/20 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{latest.message}</div>
+              {latest.title ? (
+                <div className="mt-1 truncate text-xs text-muted-foreground">
+                  {latest.title}
+                </div>
+              ) : null}
+            </div>
+            <ProgressStateIcon state={eventState(latest)} />
+          </div>
+
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-background/80">
+            <div
+              className="h-full rounded-full bg-primary transition-[width]"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+
+          <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+            <span>实时进度</span>
+            <span className="font-mono text-foreground">
+              {Math.min(current, total).toLocaleString()} /{" "}
+              {total.toLocaleString()}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-4">
+          {resumeSteps().map((step) => {
+            const state = processStepState(step.stages, visibleEvents)
+            return (
+              <div
+                key={step.label}
+                className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-background/55 px-2.5 py-2"
+              >
+                <ProgressStateIcon state={state} small />
+                <span className="truncate text-xs text-muted-foreground">
+                  {step.label}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-4 max-h-40 space-y-1 overflow-y-auto pr-1">
+          {recentEvents.map((event, index) => (
+            <div
+              key={`${event.stage}-${event.status}-${event.current ?? "x"}-${index}`}
+              className="flex min-w-0 items-start gap-2 rounded-md px-1 py-0.5 text-xs leading-5"
+            >
+              <ProgressStateIcon state={eventState(event)} small />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-foreground/85">
+                  {formatProgressMessage(event)}
+                </div>
+                {event.title ? (
+                  <div className="truncate text-muted-foreground">
+                    {event.title}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <Button type="button" disabled={busy} onClick={onClose}>
+            {busy ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : (
+              <CheckCircle2Icon className="size-4" />
+            )}
+            {busy ? "续抓中" : "完成"}
+          </Button>
+        </div>
+      </section>
+    </div>,
+    document.body
+  )
+}
+
+function ProgressStateIcon({
+  state,
+  small = false,
+}: {
+  state: ProcessStepState
+  small?: boolean
+}) {
+  const className = small ? "size-3" : "size-4"
+
+  if (state === "running") {
+    return (
+      <LoaderCircleIcon
+        className={cn(className, "shrink-0 animate-spin text-primary")}
+      />
+    )
+  }
+
+  if (state === "done") {
+    return (
+      <CheckCircle2Icon className={cn(className, "shrink-0 text-primary")} />
+    )
+  }
+
+  if (state === "error" || state === "warning") {
+    return (
+      <AlertCircleIcon
+        className={cn(
+          className,
+          "shrink-0",
+          state === "error" ? "text-destructive" : "text-primary"
+        )}
+      />
+    )
+  }
+
+  return (
+    <CircleIcon className={cn(className, "shrink-0 text-muted-foreground")} />
+  )
+}
+
+function initialResumeProgress(
+  account: Pick<Account, "fakeid" | "nickname">,
+  limit: number
+): FetchAccountProgress {
+  return {
+    fakeid: account.fakeid,
+    nickname: account.nickname,
+    stage: "prepare",
+    status: "running",
+    message: `准备续抓到 ${limit.toLocaleString()} 篇文章索引`,
+    current: 0,
+    total: limit,
+    title: null,
+  }
+}
+
+function appendProgressEvent(
+  events: FetchAccountProgress[],
+  next: FetchAccountProgress
+) {
+  const last = events[events.length - 1]
+  if (
+    last &&
+    last.stage === next.stage &&
+    last.status === next.status &&
+    last.message === next.message &&
+    last.current === next.current &&
+    last.total === next.total &&
+    last.title === next.title
+  ) {
+    return events
+  }
+
+  return [...events, next].slice(-MAX_RESUME_PROGRESS_EVENTS)
+}
+
+function nextResumeTarget(currentCount: number) {
+  const normalizedCount = Math.max(currentCount, 0)
+  if (normalizedCount >= MAX_RESUME_LIMIT) return MAX_RESUME_LIMIT
+  return Math.min(
+    Math.max(normalizedCount + RESUME_BATCH_SIZE, RESUME_BATCH_SIZE),
+    MAX_RESUME_LIMIT
+  )
+}
+
+function resumeSteps() {
+  return [
+    { label: "确认目标", stages: ["prepare"] },
+    { label: "同步账号", stages: ["account"] },
+    { label: "续抓索引", stages: ["articles"] },
+    { label: "完成入库", stages: ["complete"] },
+  ]
+}
+
+function processStepState(
+  stages: string[],
+  events: FetchAccountProgress[]
+): ProcessStepState {
+  if (
+    events.some(
+      (event) => event.status === "error" && stages.includes(event.stage)
+    )
+  ) {
+    return "error"
+  }
+
+  if (
+    events.some(
+      (event) => event.status === "warning" && stages.includes(event.stage)
+    )
+  ) {
+    return "warning"
+  }
+
+  if (
+    events.some(
+      (event) => event.status === "done" && stages.includes(event.stage)
+    )
+  ) {
+    return "done"
+  }
+
+  if (
+    events.some(
+      (event) => event.status === "running" && stages.includes(event.stage)
+    )
+  ) {
+    return "running"
+  }
+
+  const latest = events[events.length - 1]
+  if (latest?.stage === "complete" && latest.status === "done") return "done"
+
+  return "pending"
+}
+
+function eventState(event: FetchAccountProgress): ProcessStepState {
+  if (event.status === "done") return "done"
+  if (event.status === "warning") return "warning"
+  if (event.status === "error") return "error"
+  if (event.status === "running") return "running"
+  return "pending"
+}
+
+function formatProgressMessage(event: FetchAccountProgress) {
+  if (
+    typeof event.current === "number" &&
+    typeof event.total === "number" &&
+    event.total > 0
+  ) {
+    return `${event.message} (${event.current}/${event.total})`
+  }
+
+  return event.message
 }
 
 function ArticleContentStatus({
@@ -468,12 +933,14 @@ function escapeRegExp(value: string): string {
 function ArticleContextMenu({
   menu,
   fetchingAid,
+  busy,
   onClose,
   onSelect,
   onFetchContent,
 }: {
   menu: ArticleMenuState
   fetchingAid: string | null
+  busy: boolean
   onClose: () => void
   onSelect: () => void
   onFetchContent: (article: ArticleSummary) => Promise<void>
@@ -515,7 +982,7 @@ function ArticleContextMenu({
       <button
         role="menuitem"
         className="article-context-item"
-        disabled={Boolean(fetchingAid)}
+        disabled={busy}
         onClick={() => run(() => onFetchContent(article))}
       >
         {fetching ? (
@@ -557,6 +1024,16 @@ function ArticleContextMenu({
     </div>,
     document.body
   )
+}
+
+function accountToSearchResult(account: Account): AccountSearchResult {
+  return {
+    fakeid: account.fakeid,
+    nickname: account.nickname,
+    alias: account.alias,
+    signature: account.signature,
+    avatar: account.avatar,
+  }
 }
 
 function createArticleMenuState(
