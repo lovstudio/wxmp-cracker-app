@@ -647,24 +647,30 @@ function ResumeProgressDialog({
         </div>
 
         <div className="mt-4 max-h-40 space-y-1 overflow-y-auto pr-1">
-          {recentEvents.map((event, index) => (
-            <div
-              key={`${event.stage}-${event.status}-${event.current ?? "x"}-${index}`}
-              className="flex min-w-0 items-start gap-2 rounded-md px-1 py-0.5 text-xs leading-5"
-            >
-              <ProgressStateIcon state={eventState(event)} small />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-foreground/85">
-                  {formatProgressMessage(event)}
-                </div>
-                {event.title ? (
-                  <div className="truncate text-muted-foreground">
-                    {event.title}
+          {recentEvents.map((event, index) => {
+            const isLatest = index === recentEvents.length - 1
+            const rawState = eventState(event)
+            const state: ProcessStepState =
+              !isLatest && rawState === "running" ? "done" : rawState
+            return (
+              <div
+                key={`${event.stage}-${event.status}-${event.current ?? "x"}-${index}`}
+                className="flex min-w-0 items-start gap-2 rounded-md px-1 py-0.5 text-xs leading-5"
+              >
+                <ProgressStateIcon state={state} small />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-foreground/85">
+                    {formatProgressMessage(event)}
                   </div>
-                ) : null}
+                  {event.title ? (
+                    <div className="truncate text-muted-foreground">
+                      {event.title}
+                    </div>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         <div className="mt-4 flex justify-end">
