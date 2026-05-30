@@ -587,3 +587,70 @@ fn first_nonempty_line(s: &str) -> Option<String> {
         .find(|line| !line.is_empty())
         .map(ToOwned::to_owned)
 }
+
+// ---------------- GitHub archive integration -----------------------------
+
+use crate::archive;
+use crate::github;
+use crate::sync;
+
+#[tauri::command]
+pub async fn github_oauth_start() -> Result<github::DeviceCodeStart, CmdError> {
+    github::device_start().await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn github_oauth_poll(
+    device_code: String,
+) -> Result<github::DevicePollOutcome, CmdError> {
+    github::device_poll(&device_code).await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn github_oauth_status() -> Result<github::OauthStatus, CmdError> {
+    github::status().await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn github_oauth_logout() -> Result<(), CmdError> {
+    github::logout().map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn github_list_repos() -> Result<Vec<github::RepoBrief>, CmdError> {
+    github::list_repos().await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn github_create_repo(
+    name: String,
+    private: bool,
+) -> Result<github::RepoBrief, CmdError> {
+    github::create_repo(&name, private).await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn github_sync_settings_get() -> Result<archive::SyncSettings, CmdError> {
+    archive::load_settings().map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn github_sync_settings_set(
+    settings: archive::SyncSettings,
+) -> Result<archive::SyncSettings, CmdError> {
+    archive::save_settings(&settings).map_err(CmdError::from)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+pub async fn github_sync_articles(
+    app: AppHandle,
+    options: sync::SyncOptions,
+) -> Result<sync::SyncSummary, CmdError> {
+    tauri::async_runtime::spawn_blocking(move || sync::sync_articles(&app, options))
+        .await
+        .map_err(|e| CmdError {
+            message: format!("同步任务失败: {e}"),
+        })?
+        .map_err(Into::into)
+}

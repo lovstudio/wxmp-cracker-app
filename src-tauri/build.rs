@@ -9,6 +9,7 @@ const FRONTEND_ENV_KEYS: [&str; 3] = [
 
 fn main() {
     println!("cargo:rerun-if-env-changed=WXMP_ACTIVATION_SECRET");
+    println!("cargo:rerun-if-env-changed=WXMP_GITHUB_CLIENT_ID");
     println!("cargo:rerun-if-changed=../.activation-secret.local");
     for path in DOTENV_FILES {
         println!("cargo:rerun-if-changed={path}");
@@ -27,6 +28,17 @@ fn main() {
         {
             println!("cargo:rustc-env={key}={value}");
         }
+    }
+
+    // GitHub OAuth Client ID — optional at build time. If absent, the
+    // GitHub-sync UI surfaces a friendly error when the user tries to log in.
+    if let Some(client_id) = env::var("WXMP_GITHUB_CLIENT_ID")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| frontend_env.get("WXMP_GITHUB_CLIENT_ID").cloned())
+    {
+        println!("cargo:rustc-env=WXMP_GITHUB_CLIENT_ID={client_id}");
     }
 
     let activation_secret = env::var("WXMP_ACTIVATION_SECRET")

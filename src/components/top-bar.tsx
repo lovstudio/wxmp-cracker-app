@@ -4,6 +4,7 @@ import {
   BarChart3Icon,
   BookOpenTextIcon,
   GaugeIcon,
+  GitForkIcon,
   InfoIcon,
   Loader2Icon,
   LogInIcon,
@@ -44,6 +45,7 @@ export type WorkspaceTabId =
   | "profile"
   | "trends"
   | "style"
+  | "github-sync"
 
 interface TopBarProps {
   activeTab: WorkspaceTabId
@@ -60,6 +62,7 @@ const workspaceTabs = [
   { id: "profile", label: "基本信息", icon: InfoIcon },
   { id: "trends", label: "趋势分析", icon: BarChart3Icon },
   { id: "style", label: "文风分析", icon: PenLineIcon },
+  { id: "github-sync", label: "GitHub 归档", icon: GitForkIcon },
 ] satisfies Array<{
   id: WorkspaceTabId
   label: string

@@ -118,6 +118,22 @@ export const api = {
     }),
   fetchArticleContent: (aid: string, force = false) =>
     invoke<ArticleDetail>("fetch_article_content", { aid, force }),
+
+  // GitHub archive integration -------------------------------------------
+  githubOauthStart: () => invoke<GhDeviceCodeStart>("github_oauth_start"),
+  githubOauthPoll: (deviceCode: string) =>
+    invoke<GhDevicePollOutcome>("github_oauth_poll", { deviceCode }),
+  githubOauthStatus: () => invoke<GhOauthStatus>("github_oauth_status"),
+  githubOauthLogout: () => invoke<void>("github_oauth_logout"),
+  githubListRepos: () => invoke<GhRepoBrief[]>("github_list_repos"),
+  githubCreateRepo: (name: string, isPrivate: boolean) =>
+    invoke<GhRepoBrief>("github_create_repo", { name, private: isPrivate }),
+  githubSyncSettingsGet: () =>
+    invoke<GhSyncSettings>("github_sync_settings_get"),
+  githubSyncSettingsSet: (settings: GhSyncSettings) =>
+    invoke<GhSyncSettings>("github_sync_settings_set", { settings }),
+  githubSyncArticles: (options: GhSyncOptions) =>
+    invoke<GhSyncSummary>("github_sync_articles", { options }),
 }
 
 export const onLoginSuccess = (cb: () => void) => listen("login://success", cb)
@@ -127,3 +143,67 @@ export const onFetchAccountProgress = (
   cb: (progress: FetchAccountProgress) => void
 ) =>
   listen<FetchAccountProgress>("fetch-account://progress", (e) => cb(e.payload))
+export const onGithubSyncProgress = (
+  cb: (progress: GhSyncProgress) => void
+) =>
+  listen<GhSyncProgress>("github-sync://progress", (e) => cb(e.payload))
+
+// ---- GitHub types --------------------------------------------------------
+
+export interface GhDeviceCodeStart {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  expires_in: number
+  interval: number
+}
+
+export type GhDevicePollOutcome =
+  | { kind: "authorized"; login: string; avatar_url: string }
+  | { kind: "pending"; interval: number }
+  | { kind: "denied"; message: string }
+
+export interface GhOauthStatus {
+  logged_in: boolean
+  login: string | null
+  avatar_url: string | null
+}
+
+export interface GhRepoBrief {
+  full_name: string
+  name: string
+  owner: string
+  private: boolean
+  default_branch: string
+  html_url: string
+}
+
+export interface GhSyncSettings {
+  repo_full_name: string | null
+  branch: string
+  sync_images: boolean
+  auto_push: boolean
+  last_synced_at: number | null
+  last_error: string | null
+}
+
+export interface GhSyncOptions {
+  account_fakeid?: string | null
+  force?: boolean
+}
+
+export interface GhSyncSummary {
+  pushed: number
+  skipped: number
+  repo_html_url: string | null
+  commit_message: string | null
+}
+
+export type GhSyncProgress =
+  | { stage: "start"; total_candidates: number }
+  | { stage: "prepare"; message: string }
+  | { stage: "render"; current: number; total: number; title: string }
+  | { stage: "image"; current: number; total: number; url: string }
+  | { stage: "commit"; changed: number }
+  | { stage: "push"; message: string }
+  | { stage: "done"; pushed: number; skipped: number; message: string }

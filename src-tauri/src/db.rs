@@ -329,6 +329,83 @@ pub fn get_article(aid: &str) -> Result<Option<ArticleDetail>> {
     Ok(row)
 }
 
+/// Returns every article that has rendered Markdown content. Optionally filtered by fakeid.
+/// Used by the GitHub archive sync to enumerate what should be exported.
+pub fn list_articles_with_content(fakeid: Option<&str>) -> Result<Vec<ArticleDetail>> {
+    let conn = open()?;
+    let (sql, has_filter) = if fakeid.is_some() {
+        (
+            "SELECT aid, fakeid, title, link, digest, cover, author, create_time,
+                    content_html, content_md
+             FROM articles
+             WHERE fakeid = ?1
+               AND NULLIF(TRIM(content_md), '') IS NOT NULL
+             ORDER BY create_time DESC",
+            true,
+        )
+    } else {
+        (
+            "SELECT aid, fakeid, title, link, digest, cover, author, create_time,
+                    content_html, content_md
+             FROM articles
+             WHERE NULLIF(TRIM(content_md), '') IS NOT NULL
+             ORDER BY create_time DESC",
+            false,
+        )
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let mapper = |row: &Row<'_>| {
+        Ok(ArticleDetail {
+            aid: row.get(0)?,
+            fakeid: row.get(1)?,
+            title: row.get(2)?,
+            link: row.get(3)?,
+            digest: row.get(4)?,
+            cover: row.get(5)?,
+            author: row.get(6)?,
+            create_time: row.get(7)?,
+            has_content: true,
+            content_html: row.get(8)?,
+            content_md: row.get(9)?,
+        })
+    };
+    let rows: Vec<ArticleDetail> = if has_filter {
+        stmt.query_map([fakeid.unwrap()], mapper)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map([], mapper)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    Ok(rows)
+}
+
+/// Look up basic account metadata. Returns None if the fakeid is unknown.
+pub fn get_account(fakeid: &str) -> Result<Option<Account>> {
+    let conn = open()?;
+    let row = conn
+        .query_row(
+            "SELECT a.fakeid, a.nickname, a.alias, a.signature, a.round_head_img,
+                    COUNT(art.aid) AS n
+             FROM accounts a
+             LEFT JOIN articles art ON art.fakeid = a.fakeid
+             WHERE a.fakeid = ?1
+             GROUP BY a.fakeid",
+            [fakeid],
+            |row| {
+                Ok(Account {
+                    fakeid: row.get(0)?,
+                    nickname: row.get(1)?,
+                    alias: row.get(2)?,
+                    signature: row.get(3)?,
+                    avatar: row.get(4)?,
+                    article_count: row.get(5)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
 pub fn set_article_content(aid: &str, content_html: &str, content_md: &str) -> Result<()> {
     let conn = open()?;
     conn.execute(

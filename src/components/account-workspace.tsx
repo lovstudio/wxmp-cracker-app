@@ -33,7 +33,7 @@ import { copyableToast as toast } from "@/lib/toast"
 import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface AccountWorkspaceProps {
-  tab: Exclude<WorkspaceTabId, "reader">
+  tab: Exclude<WorkspaceTabId, "reader" | "github-sync">
   account: Account | null
   refreshKey: number
   onContentFetched?: (aid: string) => void

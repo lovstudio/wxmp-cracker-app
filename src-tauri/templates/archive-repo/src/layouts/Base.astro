@@ -1,0 +1,56 @@
+---
+const { title = "微信公众号归档" } = Astro.props;
+---
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml" />
+    <link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+    <style>
+      :root {
+        --bg: #f9f9f7;
+        --fg: #181818;
+        --muted: #6f6c63;
+        --primary: #cc785c;
+        --border: #d5d3cb;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        line-height: 1.7;
+      }
+      main { max-width: 760px; margin: 0 auto; padding: 32px 20px; }
+      header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+      h1 { font-family: "Newsreader", Georgia, serif; }
+      a { color: var(--primary); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .article-meta { color: var(--muted); font-size: 0.875rem; }
+      pre, code { background: #f0eee8; border-radius: 6px; }
+      pre { padding: 12px; overflow: auto; }
+      img { max-width: 100%; }
+      #search { margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1><a href="/">微信公众号归档</a></h1>
+        <div id="search"></div>
+      </header>
+      <slot />
+    </main>
+    <script src="/pagefind/pagefind-ui.js" is:inline></script>
+    <script is:inline>
+      window.addEventListener("DOMContentLoaded", () => {
+        if (window.PagefindUI) {
+          new PagefindUI({ element: "#search", showSubResults: true });
+        }
+      });
+    </script>
+  </body>
+</html>

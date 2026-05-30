@@ -1,0 +1,31 @@
+---
+import Base from "../layouts/Base.astro";
+import fs from "node:fs";
+import path from "node:path";
+
+const indexPath = path.join(process.cwd(), "index.json");
+let data = { accounts: {}, articles: {} };
+if (fs.existsSync(indexPath)) {
+  data = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+}
+
+const accounts = Object.values(data.accounts ?? {}).sort((a, b) =>
+  String(a.nickname).localeCompare(String(b.nickname), "zh")
+);
+const totalArticles = Object.keys(data.articles ?? {}).length;
+---
+<Base title="微信公众号归档">
+  <p class="article-meta">
+    {accounts.length} 个公众号 · {totalArticles} 篇文章
+  </p>
+  <ul>
+    {accounts.map((a) => (
+      <li>
+        <a href={`/accounts/${encodeURIComponent(a.nickname)}/`}>
+          <strong>{a.nickname}</strong>
+        </a>
+        <span class="article-meta"> · {a.article_count} 篇</span>
+      </li>
+    ))}
+  </ul>
+</Base>

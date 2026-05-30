@@ -2,10 +2,13 @@ use tauri::{image::Image, tray::TrayIconBuilder, webview::PageLoadEvent};
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
 
+mod archive;
 mod auth;
 mod commands;
 mod db;
+mod github;
 mod license;
+mod sync;
 
 const LOGIN_WINDOW_LABEL: &str = "wxmp-login";
 
@@ -101,6 +104,15 @@ pub fn run() {
             commands::fetch_account,
             commands::fetch_selected_account,
             commands::fetch_article_content,
+            commands::github_oauth_start,
+            commands::github_oauth_poll,
+            commands::github_oauth_status,
+            commands::github_oauth_logout,
+            commands::github_list_repos,
+            commands::github_create_repo,
+            commands::github_sync_settings_get,
+            commands::github_sync_settings_set,
+            commands::github_sync_articles,
         ])
         .setup(|app| {
             setup_tray(app)?;

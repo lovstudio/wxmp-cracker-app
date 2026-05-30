@@ -22,15 +22,23 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "stream", "blocking"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
 anyhow = "1"
 thiserror = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "fs", "io-util"] }
 base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+slug = "0.1"
+regex = "1"
+keyring = "3"
+include_dir = "0.7"
+futures-util = "0.3"
+urlencoding = "2"
 
 [profile.dev]
 incremental = true

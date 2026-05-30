@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react"
 import { AccountSidebar } from "@/components/account-sidebar"
 import { AccountWorkspace } from "@/components/account-workspace"
+import { GithubSyncSettings } from "@/components/github-sync-settings"
 import { ArticleList } from "@/components/article-list"
 import { ArticleDetail as ArticleDetailView } from "@/components/article-detail"
 import { TopBar, type WorkspaceTabId } from "@/components/top-bar"
@@ -284,6 +285,11 @@ function WorkspaceApp() {
       toast.success(`已新增 ${added?.nickname ?? account.nickname}`)
       setAddAccountOpen(false)
       setFetchProgressEvents([])
+
+      // GitHub auto-push hook: if the user has it enabled, kick off an
+      // incremental sync for the freshly-fetched account. Fire-and-forget —
+      // errors surface via the GitHub-sync progress channel + toast.
+      void maybeAutoPush(account.fakeid)
     } catch (e) {
       const message = errorMessage(e)
       setFetchProgressEvents((currentEvents) =>
@@ -496,6 +502,10 @@ function WorkspaceApp() {
                     }}
                   />
                 </>
+              ) : activeTab === "github-sync" ? (
+                <div className="flex-1 overflow-y-auto">
+                  <GithubSyncSettings />
+                </div>
               ) : (
                 <AccountWorkspace
                   tab={activeTab}
@@ -772,4 +782,17 @@ function moveStringItem(items: string[], oldIndex: number, newIndex: number) {
   const [item] = next.splice(oldIndex, 1)
   next.splice(newIndex, 0, item)
   return next
+}
+
+async function maybeAutoPush(fakeid: string) {
+  try {
+    const settings = await api.githubSyncSettingsGet()
+    if (!settings.auto_push || !settings.repo_full_name) return
+    const summary = await api.githubSyncArticles({ account_fakeid: fakeid })
+    if (summary.pushed > 0) {
+      toast.success(`已自动同步 ${summary.pushed} 篇到 GitHub`)
+    }
+  } catch (e) {
+    toast.error(`GitHub 自动同步失败: ${String(e)}`)
+  }
 }

@@ -128,6 +128,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          WXMP_GITHUB_CLIENT_ID: Ov23lis0pKNGtYAJJ3pI
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           bun tauri build ${{ matrix.args }}
@@ -149,6 +150,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          WXMP_GITHUB_CLIENT_ID: Ov23lis0pKNGtYAJJ3pI
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
@@ -165,6 +167,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_LOVSTUDIO_SITE_URL: ${{ secrets.VITE_LOVSTUDIO_SITE_URL }}
+          WXMP_GITHUB_CLIENT_ID: Ov23lis0pKNGtYAJJ3pI
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
