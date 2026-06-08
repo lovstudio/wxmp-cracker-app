@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react"
 import { AccountSidebar } from "@/components/account-sidebar"
 import { AccountWorkspace } from "@/components/account-workspace"
 import { GithubSyncSettings } from "@/components/github-sync-settings"
@@ -74,6 +80,7 @@ function WorkspaceApp() {
   const [authAccount, setAuthAccount] = useState<LoginAccount | null>(null)
   const [lastLoginAt, setLastLoginAt] = useState<number | null>(null)
   const [addAccountOpen, setAddAccountOpen] = useState(false)
+  const [addAccountInitialQuery, setAddAccountInitialQuery] = useState("")
   const [lovstudioAuthOpen, setLovstudioAuthOpen] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
   const [licenseOpen, setLicenseOpen] = useState(false)
@@ -85,22 +92,46 @@ function WorkspaceApp() {
   >([])
   const [articleRefreshKey, setArticleRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("reader")
-  const orderedAccounts = orderAccounts(accounts, accountOrder)
-  const archivedFakeidSet = new Set(archivedFakeids)
-  const unarchivedAccounts = orderedAccounts.filter(
-    (account) => !archivedFakeidSet.has(account.fakeid)
+  const orderedAccounts = useMemo(
+    () => orderAccounts(accounts, accountOrder),
+    [accounts, accountOrder]
   )
-  const activeAccounts = groupPinnedAccounts(unarchivedAccounts, pinnedFakeids)
-  const archivedAccounts = orderedAccounts.filter((account) =>
-    archivedFakeidSet.has(account.fakeid)
+  const archivedFakeidSet = useMemo(
+    () => new Set(archivedFakeids),
+    [archivedFakeids]
   )
-  const selectedFakeid =
-    activeFakeid &&
-    activeAccounts.some((account) => account.fakeid === activeFakeid)
-      ? activeFakeid
-      : (activeAccounts[0]?.fakeid ?? null)
-  const activeAccount =
-    activeAccounts.find((account) => account.fakeid === selectedFakeid) ?? null
+  const unarchivedAccounts = useMemo(
+    () =>
+      orderedAccounts.filter(
+        (account) => !archivedFakeidSet.has(account.fakeid)
+      ),
+    [archivedFakeidSet, orderedAccounts]
+  )
+  const activeAccounts = useMemo(
+    () => groupPinnedAccounts(unarchivedAccounts, pinnedFakeids),
+    [pinnedFakeids, unarchivedAccounts]
+  )
+  const archivedAccounts = useMemo(
+    () =>
+      orderedAccounts.filter((account) =>
+        archivedFakeidSet.has(account.fakeid)
+      ),
+    [archivedFakeidSet, orderedAccounts]
+  )
+  const selectedFakeid = useMemo(
+    () =>
+      activeFakeid &&
+      activeAccounts.some((account) => account.fakeid === activeFakeid)
+        ? activeFakeid
+        : (activeAccounts[0]?.fakeid ?? null),
+    [activeAccounts, activeFakeid]
+  )
+  const activeAccount = useMemo(
+    () =>
+      activeAccounts.find((account) => account.fakeid === selectedFakeid) ??
+      null,
+    [activeAccounts, selectedFakeid]
+  )
   const lovstudioAccountId = user?.id ?? null
   const lovstudioDisplayName =
     profile?.display_name ??
@@ -220,7 +251,7 @@ function WorkspaceApp() {
     writeStringList(PINNED_ACCOUNTS_STORAGE_KEY, pinnedFakeids)
   }, [pinnedFakeids])
 
-  const openAddAccount = () => {
+  const openAddAccount = (initialQuery?: string) => {
     if (!lovstudioAccountId) {
       toast.error("请先登录 Lovstudio 账号")
       setLovstudioAuthOpen(true)
@@ -235,6 +266,7 @@ function WorkspaceApp() {
       return
     }
     setFetchProgressEvents([])
+    setAddAccountInitialQuery(initialQuery?.trim() ?? "")
     setAddAccountOpen(true)
   }
 
@@ -284,6 +316,7 @@ function WorkspaceApp() {
 
       toast.success(`已新增 ${added?.nickname ?? account.nickname}`)
       setAddAccountOpen(false)
+      setAddAccountInitialQuery("")
       setFetchProgressEvents([])
 
       // GitHub auto-push hook: if the user has it enabled, kick off an
@@ -526,13 +559,23 @@ function WorkspaceApp() {
       </div>
       <AddAccountDialog
         open={addAccountOpen}
+        initialQuery={addAccountInitialQuery}
         busy={addingAccount}
         progressEvents={fetchProgressEvents}
+        loggedIn={loggedIn}
         onOpenChange={(open) => {
           setAddAccountOpen(open)
-          if (!open) setFetchProgressEvents([])
+          if (!open) {
+            setAddAccountInitialQuery("")
+            setFetchProgressEvents([])
+          }
         }}
         onSearch={api.searchAccounts}
+        onLogin={() => {
+          api
+            .openLogin()
+            .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
+        }}
         onSubmit={addAccount}
       />
       {licenseStatus && !licenseStatus.active ? (

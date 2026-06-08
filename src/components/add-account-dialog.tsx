@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AlertCircleIcon,
   ArrowLeftIcon,
@@ -17,16 +17,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AccountSearchResult, FetchAccountProgress } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
+import { isWxmpAuthError } from "@/lib/toast"
 
 type Step = "search" | "fetch"
 type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 
 interface Props {
   open: boolean
+  initialQuery?: string | null
   busy: boolean
   progressEvents: FetchAccountProgress[]
+  loggedIn: boolean
   onOpenChange: (open: boolean) => void
   onSearch: (query: string) => Promise<AccountSearchResult[]>
+  onLogin: () => void
   onSubmit: (
     account: AccountSearchResult,
     limit: number,
@@ -36,34 +40,44 @@ interface Props {
 
 export function AddAccountDialog({
   open,
+  initialQuery = null,
   busy,
   progressEvents,
+  loggedIn,
   onOpenChange,
   onSearch,
+  onLogin,
   onSubmit,
 }: Props) {
   if (!open) return null
 
   return (
     <AddAccountDialogContent
+      initialQuery={initialQuery}
       busy={busy}
       progressEvents={progressEvents}
+      loggedIn={loggedIn}
       onOpenChange={onOpenChange}
       onSearch={onSearch}
+      onLogin={onLogin}
       onSubmit={onSubmit}
     />
   )
 }
 
 function AddAccountDialogContent({
+  initialQuery,
   busy,
   progressEvents,
+  loggedIn,
   onOpenChange,
   onSearch,
+  onLogin,
   onSubmit,
 }: Omit<Props, "open">) {
+  const normalizedInitialQuery = initialQuery?.trim() ?? ""
   const [step, setStep] = useState<Step>("search")
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(normalizedInitialQuery)
   const [searching, setSearching] = useState(false)
   const [searchedQuery, setSearchedQuery] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -71,6 +85,7 @@ function AddAccountDialogContent({
   const [selectedFakeid, setSelectedFakeid] = useState<string | null>(null)
   const [limit, setLimit] = useState("20")
   const [withContent, setWithContent] = useState(false)
+  const [initialSearchStarted, setInitialSearchStarted] = useState(false)
 
   const trimmedQuery = query.trim()
   const parsedLimit = Number.parseInt(limit, 10)
@@ -91,24 +106,53 @@ function AddAccountDialogContent({
     setSelectedFakeid(null)
   }
 
+  const searchAccountsFor = useCallback(
+    async (searchQuery: string) => {
+      const normalizedQuery = searchQuery.trim()
+      if (!normalizedQuery || busy || searching) return
+
+      setSearching(true)
+      setSearchError(null)
+      setSelectedFakeid(null)
+
+      try {
+        const results = await onSearch(normalizedQuery)
+        setSearchResults(results)
+        setSearchedQuery(normalizedQuery)
+      } catch (error) {
+        setSearchResults([])
+        setSearchedQuery("")
+        setSearchError(errorMessage(error))
+      } finally {
+        setSearching(false)
+      }
+    },
+    [busy, onSearch, searching]
+  )
+
   const searchAccounts = async () => {
     if (!canSearch || actionBusy) return
-    setSearching(true)
-    setSearchError(null)
-    setSelectedFakeid(null)
-
-    try {
-      const results = await onSearch(trimmedQuery)
-      setSearchResults(results)
-      setSearchedQuery(trimmedQuery)
-    } catch (error) {
-      setSearchResults([])
-      setSearchedQuery("")
-      setSearchError(errorMessage(error))
-    } finally {
-      setSearching(false)
-    }
+    await searchAccountsFor(trimmedQuery)
   }
+
+  useEffect(() => {
+    if (!normalizedInitialQuery || initialSearchStarted) return
+
+    setInitialSearchStarted(true)
+    void searchAccountsFor(normalizedInitialQuery)
+  }, [initialSearchStarted, normalizedInitialQuery, searchAccountsFor])
+
+  // After a successful re-login, the previous auth error is stale — clear it and
+  // re-run the last search so results load without the user having to retry.
+  const wasLoggedIn = useRef(loggedIn)
+  useEffect(() => {
+    const justLoggedIn = loggedIn && !wasLoggedIn.current
+    wasLoggedIn.current = loggedIn
+    if (!justLoggedIn) return
+
+    setSearchError(null)
+    if (trimmedQuery) void searchAccountsFor(trimmedQuery)
+  }, [loggedIn, trimmedQuery, searchAccountsFor])
 
   return (
     <div
@@ -202,6 +246,7 @@ function AddAccountDialogContent({
               results={searchResults}
               selectedFakeid={selectedFakeid}
               onSelect={setSelectedFakeid}
+              onLogin={onLogin}
             />
           </div>
         ) : (
@@ -310,6 +355,7 @@ function SearchResults({
   results,
   selectedFakeid,
   onSelect,
+  onLogin,
 }: {
   busy: boolean
   error: string | null
@@ -317,6 +363,7 @@ function SearchResults({
   results: AccountSearchResult[]
   selectedFakeid: string | null
   onSelect: (fakeid: string) => void
+  onLogin: () => void
 }) {
   if (busy) {
     return (
@@ -328,9 +375,20 @@ function SearchResults({
   }
 
   if (error) {
+    const isAuthError = isWxmpAuthError(error)
     return (
-      <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-        {error}
+      <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <span className="min-w-0 break-words">{error}</span>
+        {isAuthError ? (
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={onLogin}
+          >
+            重新登录
+          </Button>
+        ) : null}
       </div>
     )
   }
