@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 - 2026-06-13
+
+### Added
+
+- GitHub OAuth integration with automatic article archiving to a GitHub repository.
+- Multi-mode resumable scraping with interruptible runs and local file locating.
+- One-click backfill of all missing article bodies.
+- Resume-scraping progress dialog.
+
+### Fixed
+
+- One-click re-login with automatic status sync when account authentication fails.
+- Historical progress events no longer spin indefinitely.
+
 ## 0.1.9 - 2026-05-24
 
 ### Added
