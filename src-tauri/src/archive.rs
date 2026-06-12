@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 /// File name used in the wcx data dir to persist GitHub-sync user prefs.
@@ -81,6 +81,37 @@ pub fn repos_root() -> Result<PathBuf> {
 pub fn repo_local_path(full_name: &str) -> Result<PathBuf> {
     let safe = full_name.replace('/', "__");
     Ok(repos_root()?.join(safe))
+}
+
+pub fn article_local_file_path(aid: &str) -> Result<Option<PathBuf>> {
+    let settings = load_settings()?;
+    let Some(repo_full_name) = settings.repo_full_name.as_deref() else {
+        return Ok(None);
+    };
+
+    let repo_dir = repo_local_path(repo_full_name)?;
+    if !repo_dir.exists() {
+        return Ok(None);
+    }
+
+    let index = load_index(&repo_dir)?;
+    let Some(article) = index.articles.get(aid) else {
+        return Ok(None);
+    };
+
+    let relative_path = PathBuf::from(&article.markdown_path);
+    let escapes_repo = relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir));
+    if escapes_repo {
+        return Err(anyhow!(
+            "归档索引中的文章路径不安全：{}",
+            article.markdown_path
+        ));
+    }
+
+    Ok(Some(repo_dir.join(relative_path)))
 }
 
 // ---- index.json schema ---------------------------------------------------

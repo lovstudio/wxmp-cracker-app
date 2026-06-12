@@ -4,25 +4,48 @@ import {
   BookOpenTextIcon,
   CalendarClockIcon,
   CheckCircle2Icon,
+  CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  FileTextIcon,
   FileX2Icon,
+  FolderOpenIcon,
+  LinkIcon,
   LoaderCircleIcon,
+  MoreHorizontalIcon,
   PenLineIcon,
 } from "lucide-react"
+import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
-import { openUrl } from "@tauri-apps/plugin-opener"
-import { api, type ArticleDetail as Detail } from "@/lib/api"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener"
+import {
+  api,
+  type ArticleDetail as Detail,
+  type ArticleLocalFile,
+} from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import { copyableToast as toast } from "@/lib/toast"
+import { copyText, copyableToast as toast } from "@/lib/toast"
 
 interface Props {
   aid: string | null
   refreshKey?: number
   onBackToList?: () => void
   onContentFetched?: (aid: string) => void
+}
+
+interface ArticleDetailMenuState {
+  x: number
+  y: number
 }
 
 export function ArticleDetail({
@@ -32,8 +55,12 @@ export function ArticleDetail({
   onContentFetched,
 }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [localFile, setLocalFile] = useState<ArticleLocalFile | null>(null)
   const [loading, setLoading] = useState(false)
   const [fetchingContent, setFetchingContent] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ArticleDetailMenuState | null>(
+    null
+  )
 
   useEffect(() => {
     setFetchingContent(false)
@@ -52,6 +79,40 @@ export function ArticleDetail({
       cancelled = true
     }
   }, [aid, refreshKey])
+
+  useEffect(() => {
+    setLocalFile(null)
+    setContextMenu(null)
+    if (!aid) return
+
+    let cancelled = false
+    api
+      .articleLocalFile(aid)
+      .then((file) => !cancelled && setLocalFile(file))
+      .catch(() => !cancelled && setLocalFile(null))
+
+    return () => {
+      cancelled = true
+    }
+  }, [aid, refreshKey])
+
+  useEffect(() => {
+    if (!contextMenu) return
+
+    const close = () => setContextMenu(null)
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close()
+    }
+
+    window.addEventListener("click", close)
+    window.addEventListener("resize", close)
+    window.addEventListener("keydown", closeOnEscape)
+    return () => {
+      window.removeEventListener("click", close)
+      window.removeEventListener("resize", close)
+      window.removeEventListener("keydown", closeOnEscape)
+    }
+  }, [contextMenu])
 
   const fetchContent = async () => {
     if (!detail || fetchingContent) return
@@ -127,10 +188,72 @@ export function ArticleDetail({
   }
 
   const cover = normalizeWechatImageUrl(detail.cover)
+  const localFilePath = localFile?.path ?? null
+  const localFileExists = Boolean(localFile?.exists)
+
+  const runArticleAction = (
+    action: () => Promise<void> | void,
+    fallbackMessage: string
+  ) => {
+    void Promise.resolve(action()).catch((error) => {
+      toast.error(`${fallbackMessage}：${errorMessage(error)}`)
+    })
+  }
+
+  const openOriginal = () => {
+    runArticleAction(() => openUrl(detail.link), "打开原文失败")
+  }
+
+  const openLocalFile = () => {
+    if (!localFilePath) {
+      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      return
+    }
+    if (!localFileExists) {
+      toast.warning("本地文章文件不存在，请重新同步归档仓库")
+      return
+    }
+    runArticleAction(() => openPath(localFilePath), "打开本地文件失败")
+  }
+
+  const revealLocalFile = () => {
+    if (!localFilePath) {
+      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      return
+    }
+    if (!localFileExists) {
+      toast.warning("本地文章文件不存在，请重新同步归档仓库")
+      return
+    }
+    runArticleAction(
+      () => revealItemInDir(localFilePath),
+      "Reveal 本地文件失败"
+    )
+  }
+
+  const copyLocalFilePath = () => {
+    if (!localFilePath) {
+      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      return
+    }
+    void copyText(localFilePath)
+  }
+
+  const copyOriginalLink = () => {
+    void copyText(detail.link)
+  }
 
   return (
     <main className="article-detail-reader reader-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="reader-header">
+      <div
+        className="reader-header"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          setContextMenu(
+            createArticleDetailMenuState(event.clientX, event.clientY)
+          )
+        }}
+      >
         <div className="reader-header-inner">
           {onBackToList && (
             <Button
@@ -191,15 +314,15 @@ export function ArticleDetail({
                   />
                 </div>
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                className="reader-open-button"
-                onClick={() => openUrl(detail.link)}
-              >
-                <ExternalLinkIcon className="size-3.5" />
-                原文
-              </Button>
+              <ArticleDetailActionDropdown
+                detail={detail}
+                localFile={localFile}
+                onOpenOriginal={openOriginal}
+                onOpenLocalFile={openLocalFile}
+                onRevealLocalFile={revealLocalFile}
+                onCopyLocalFilePath={copyLocalFilePath}
+                onCopyOriginalLink={copyOriginalLink}
+              />
             </div>
           </div>
         </div>
@@ -213,8 +336,212 @@ export function ArticleDetail({
           />
         </div>
       </ScrollArea>
+      {contextMenu && (
+        <ArticleDetailContextMenu
+          menu={contextMenu}
+          detail={detail}
+          localFile={localFile}
+          onClose={() => setContextMenu(null)}
+          onOpenOriginal={openOriginal}
+          onOpenLocalFile={openLocalFile}
+          onRevealLocalFile={revealLocalFile}
+          onCopyLocalFilePath={copyLocalFilePath}
+          onCopyOriginalLink={copyOriginalLink}
+        />
+      )}
     </main>
   )
+}
+
+function ArticleDetailActionDropdown({
+  detail,
+  localFile,
+  onOpenOriginal,
+  onOpenLocalFile,
+  onRevealLocalFile,
+  onCopyLocalFilePath,
+  onCopyOriginalLink,
+}: {
+  detail: Detail
+  localFile: ArticleLocalFile | null
+  onOpenOriginal: () => void
+  onOpenLocalFile: () => void
+  onRevealLocalFile: () => void
+  onCopyLocalFilePath: () => void
+  onCopyOriginalLink: () => void
+}) {
+  const localFilePath = localFile?.path ?? null
+  const localFileExists = Boolean(localFile?.exists)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          className="reader-menu-button"
+          aria-label="文章操作"
+          title="文章操作"
+        >
+          <MoreHorizontalIcon className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel className="min-w-0">
+          <div className="truncate text-foreground">{detail.title}</div>
+          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+            {localFileStatus(localFile)}
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onOpenOriginal}>
+          <ExternalLinkIcon className="size-4" />
+          查看原文
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!localFileExists}
+          onSelect={onOpenLocalFile}
+        >
+          <FileTextIcon className="size-4" />
+          查看本地文件
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!localFileExists}
+          onSelect={onRevealLocalFile}
+        >
+          <FolderOpenIcon className="size-4" />
+          Reveal 本地文件
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={!localFilePath}
+          onSelect={onCopyLocalFilePath}
+        >
+          <CopyIcon className="size-4" />
+          复制本地路径
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onCopyOriginalLink}>
+          <LinkIcon className="size-4" />
+          复制原文链接
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function ArticleDetailContextMenu({
+  menu,
+  detail,
+  localFile,
+  onClose,
+  onOpenOriginal,
+  onOpenLocalFile,
+  onRevealLocalFile,
+  onCopyLocalFilePath,
+  onCopyOriginalLink,
+}: {
+  menu: ArticleDetailMenuState
+  detail: Detail
+  localFile: ArticleLocalFile | null
+  onClose: () => void
+  onOpenOriginal: () => void
+  onOpenLocalFile: () => void
+  onRevealLocalFile: () => void
+  onCopyLocalFilePath: () => void
+  onCopyOriginalLink: () => void
+}) {
+  const localFilePath = localFile?.path ?? null
+  const localFileExists = Boolean(localFile?.exists)
+
+  const run = (action: () => void) => {
+    onClose()
+    action()
+  }
+
+  return createPortal(
+    <div
+      role="menu"
+      className="article-context-menu article-detail-context-menu"
+      style={{ left: menu.x, top: menu.y }}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <div className="article-context-title">
+        <div>{detail.title}</div>
+        <div className="article-context-subtitle">
+          {localFileStatus(localFile)}
+        </div>
+      </div>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        onClick={() => run(onOpenOriginal)}
+      >
+        <ExternalLinkIcon className="size-3.5" />
+        查看原文
+      </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={!localFileExists}
+        onClick={() => run(onOpenLocalFile)}
+      >
+        <FileTextIcon className="size-3.5" />
+        查看本地文件
+      </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={!localFileExists}
+        onClick={() => run(onRevealLocalFile)}
+      >
+        <FolderOpenIcon className="size-3.5" />
+        Reveal 本地文件
+      </button>
+      <div className="article-context-separator" />
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={!localFilePath}
+        onClick={() => run(onCopyLocalFilePath)}
+      >
+        <CopyIcon className="size-3.5" />
+        复制本地路径
+      </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        onClick={() => run(onCopyOriginalLink)}
+      >
+        <LinkIcon className="size-3.5" />
+        复制原文链接
+      </button>
+    </div>,
+    document.body
+  )
+}
+
+function localFileStatus(localFile: ArticleLocalFile | null): string {
+  if (!localFile) return "本地 Markdown 未生成"
+  return localFile.exists ? "本地 Markdown 已生成" : "本地路径存在，文件缺失"
+}
+
+function createArticleDetailMenuState(
+  clientX: number,
+  clientY: number
+): ArticleDetailMenuState {
+  const width = 242
+  const height = 238
+  const padding = 8
+  const x = Math.min(clientX, window.innerWidth - width - padding)
+  const y = Math.min(clientY, window.innerHeight - height - padding)
+
+  return {
+    x: Math.max(padding, x),
+    y: Math.max(padding, y),
+  }
 }
 
 function ArticleBody({

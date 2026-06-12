@@ -31,6 +31,11 @@ export interface ArticleDetail extends ArticleSummary {
   content_md: string | null
 }
 
+export interface ArticleLocalFile {
+  path: string
+  exists: boolean
+}
+
 export interface LoginAccount {
   nickname: string | null
   username: string | null
@@ -50,6 +55,8 @@ export interface FetchAccountResult {
   stdout: string
   stderr: string
 }
+
+export type FetchMode = "forward" | "backward" | "audit"
 
 export interface AccountSearchResult {
   fakeid: string
@@ -102,6 +109,8 @@ export const api = {
   getArticle: (aid: string) =>
     invoke<ArticleDetail | null>("get_article", { aid }),
   cacheDbPath: () => invoke<string>("cache_db_path"),
+  articleLocalFile: (aid: string) =>
+    invoke<ArticleLocalFile | null>("article_local_file", { aid }),
   searchAccounts: (query: string) =>
     invoke<AccountSearchResult[]>("search_accounts", { query }),
   fetchAccount: (query: string, limit: number, withContent: boolean) =>
@@ -109,13 +118,19 @@ export const api = {
   fetchSelectedAccount: (
     account: AccountSearchResult,
     limit: number,
-    withContent: boolean
+    withContent: boolean,
+    mode: FetchMode = "forward",
+    auditDate?: string | null
   ) =>
     invoke<FetchAccountResult>("fetch_selected_account", {
       account,
       limit,
       withContent,
+      mode,
+      auditDate: auditDate ?? null,
     }),
+  cancelFetchAccount: (fakeid: string) =>
+    invoke<boolean>("cancel_fetch_account", { fakeid }),
   fetchArticleContent: (aid: string, force = false) =>
     invoke<ArticleDetail>("fetch_article_content", { aid, force }),
 
@@ -143,9 +158,7 @@ export const onFetchAccountProgress = (
   cb: (progress: FetchAccountProgress) => void
 ) =>
   listen<FetchAccountProgress>("fetch-account://progress", (e) => cb(e.payload))
-export const onGithubSyncProgress = (
-  cb: (progress: GhSyncProgress) => void
-) =>
+export const onGithubSyncProgress = (cb: (progress: GhSyncProgress) => void) =>
   listen<GhSyncProgress>("github-sync://progress", (e) => cb(e.payload))
 
 // ---- GitHub types --------------------------------------------------------

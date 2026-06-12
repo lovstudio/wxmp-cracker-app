@@ -38,7 +38,6 @@ import {
   MoreHorizontalIcon,
   PinIcon,
   PinOffIcon,
-  PlusIcon,
   RotateCcwIcon,
   SearchIcon,
   Settings2Icon,
@@ -94,7 +93,7 @@ interface Props {
   onLovstudioLogin: () => void
   onLovstudioLogout: () => void
   onSelect: (fakeid: string) => void
-  onAddAccount: () => void
+  onAddAccount: (query?: string) => void
   onLogin: () => void
   onReorder: (activeFakeid: string, overFakeid: string) => void
   onArchive: (fakeid: string) => void
@@ -186,6 +185,7 @@ export function AccountSidebar({
     () => accounts.filter((account) => !pinnedFakeidSet.has(account.fakeid)),
     [accounts, pinnedFakeidSet]
   )
+  const trimmedQuery = q.trim()
 
   const filteredPinned = useMemo(() => {
     return filterAccounts(pinnedAccounts, q)
@@ -204,10 +204,12 @@ export function AccountSidebar({
     () => filtered.map((account) => account.fakeid),
     [filtered]
   )
-  const hasSearchResults =
-    filteredPinned.length > 0 ||
-    filtered.length > 0 ||
-    filteredArchived.length > 0
+  const hasActiveSearchResults =
+    filteredPinned.length > 0 || filtered.length > 0
+  const hasLocalSearchResults =
+    hasActiveSearchResults || filteredArchived.length > 0
+  const showSearchCandidate = trimmedQuery.length > 0 && !hasActiveSearchResults
+  const hasSearchResults = hasLocalSearchResults || showSearchCandidate
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return
@@ -313,27 +315,19 @@ export function AccountSidebar({
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <div className="search-shell relative min-w-0 flex-1 rounded-lg">
-            <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-sidebar-foreground/45" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索公众号、别名或签名"
-              className="h-9 border-0 bg-transparent pr-3 pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/36 focus-visible:ring-1 focus-visible:ring-sidebar-ring/70"
-            />
-          </div>
-          <Button
-            type="button"
-            size="icon"
-            variant="outline"
-            aria-label="新增公众号"
-            title="新增公众号"
-            className="size-9 shrink-0 border-sidebar-border/70 bg-sidebar-accent/60 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            onClick={onAddAccount}
-          >
-            <PlusIcon className="size-4" />
-          </Button>
+        <div className="search-shell relative rounded-lg">
+          <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-sidebar-foreground/45" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !showSearchCandidate) return
+              event.preventDefault()
+              onAddAccount(trimmedQuery)
+            }}
+            placeholder="搜索公众号、别名或签名"
+            className="h-9 border-0 bg-transparent pr-3 pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/36 focus-visible:ring-1 focus-visible:ring-sidebar-ring/70"
+          />
         </div>
       </SidebarHeader>
       <SidebarContent>
@@ -364,6 +358,34 @@ export function AccountSidebar({
             </SidebarGroupLabel>
             <SidebarMenu className="gap-1">
               {renderSortableAccounts(filtered, filteredIds)}
+            </SidebarMenu>
+          </SidebarGroup>
+        )}
+        {showSearchCandidate && (
+          <SidebarGroup className="px-3 pb-4">
+            <SidebarGroupLabel className="h-7 px-1 text-[10px] font-semibold text-sidebar-foreground/42">
+              候选
+            </SidebarGroupLabel>
+            <SidebarMenu className="gap-1">
+              <SidebarMenuItem>
+                <button
+                  type="button"
+                  className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-sidebar-border/60 bg-sidebar-accent/45 px-3 py-3 text-left text-sidebar-foreground outline-hidden transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  onClick={() => onAddAccount(trimmedQuery)}
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-sidebar/60 text-sidebar-primary">
+                    <SearchIcon className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-semibold">
+                      查询「{trimmedQuery}」
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] text-sidebar-foreground/48">
+                      在候选公众号中搜索并添加
+                    </span>
+                  </span>
+                </button>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroup>
         )}

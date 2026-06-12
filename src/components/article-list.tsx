@@ -3,15 +3,18 @@ import {
   AlertCircleIcon,
   CalendarIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
   FileTextIcon,
   FileX2Icon,
+  HistoryIcon,
   LinkIcon,
   LoaderCircleIcon,
   PlayCircleIcon,
+  RefreshCwIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react"
@@ -19,6 +22,13 @@ import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import {
   api,
@@ -28,6 +38,7 @@ import {
   type ArticleMatchField,
   type ArticleSummary,
   type FetchAccountProgress,
+  type FetchMode,
 } from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
@@ -50,11 +61,23 @@ interface ArticleMenuState {
   y: number
 }
 
+interface AuditSelection {
+  date: string
+}
+
 type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 
 const MAX_RESUME_PROGRESS_EVENTS = 24
 const RESUME_BATCH_SIZE = 20
 const MAX_RESUME_LIMIT = 500
+const MIN_CONTENT_SEARCH_LENGTH = 2
+const CONTENT_SEARCH_DEBOUNCE_MS = 220
+
+const RESUME_MODE_LABELS: Record<FetchMode, string> = {
+  forward: "向前续抓",
+  backward: "向后续抓",
+  audit: "完备性回扫",
+}
 
 export function ArticleList({
   account,
@@ -68,10 +91,15 @@ export function ArticleList({
   const [items, setItems] = useState<ArticleSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [resuming, setResuming] = useState(false)
+  const [resumeMode, setResumeMode] = useState<FetchMode>("forward")
+  const [resumeLimit, setResumeLimit] = useState(RESUME_BATCH_SIZE)
+  const [resumeAuditDate, setResumeAuditDate] = useState<string | null>(null)
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
   const [resumeProgressEvents, setResumeProgressEvents] = useState<
     FetchAccountProgress[]
   >([])
+  const [cancellingResume, setCancellingResume] = useState(false)
+  const [auditDialogOpen, setAuditDialogOpen] = useState(false)
   const [q, setQ] = useState("")
   const [menu, setMenu] = useState<ArticleMenuState | null>(null)
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
@@ -82,6 +110,7 @@ export function ArticleList({
   const [contentSearchVersion, setContentSearchVersion] = useState(0)
   const selectedAccount = account?.fakeid === fakeid ? account : null
   const resumeActiveRef = useRef(false)
+  const articleSearchCacheRef = useRef(new Map<string, ArticleSummary[]>())
 
   useEffect(() => {
     if (!menu) return
@@ -148,11 +177,37 @@ export function ArticleList({
   }, [selectedAccount])
 
   const trimmedQuery = q.trim()
+  const debouncedSearchQuery = useDebouncedValue(
+    trimmedQuery,
+    CONTENT_SEARCH_DEBOUNCE_MS
+  )
 
   useEffect(() => {
-    if (!fakeid || !trimmedQuery) {
+    if (!fakeid || !debouncedSearchQuery) {
       setSearchItems([])
       setSearchedQuery("")
+      setSearchError(null)
+      setSearching(false)
+      return
+    }
+
+    if (debouncedSearchQuery.length < MIN_CONTENT_SEARCH_LENGTH) {
+      setSearchItems([])
+      setSearchedQuery("")
+      setSearchError(null)
+      setSearching(false)
+      return
+    }
+
+    const cacheKey = articleSearchCacheKey(
+      fakeid,
+      debouncedSearchQuery,
+      contentSearchVersion
+    )
+    const cachedSearchItems = articleSearchCacheRef.current.get(cacheKey)
+    if (cachedSearchItems) {
+      setSearchItems(cachedSearchItems)
+      setSearchedQuery(debouncedSearchQuery)
       setSearchError(null)
       setSearching(false)
       return
@@ -162,30 +217,29 @@ export function ArticleList({
     setSearchError(null)
     setSearching(true)
 
-    const timeout = window.setTimeout(() => {
-      api
-        .searchArticles(fakeid, trimmedQuery)
-        .then((result) => {
-          if (cancelled) return
-          setSearchItems(result)
-          setSearchedQuery(trimmedQuery)
-        })
-        .catch((error) => {
-          if (cancelled) return
-          setSearchItems([])
-          setSearchedQuery("")
-          setSearchError(errorMessage(error))
-        })
-        .finally(() => {
-          if (!cancelled) setSearching(false)
-        })
-    }, 180)
+    api
+      .searchArticles(fakeid, debouncedSearchQuery)
+      .then((result) => {
+        if (cancelled) return
+        articleSearchCacheRef.current.set(cacheKey, result)
+        pruneArticleSearchCache(articleSearchCacheRef.current)
+        setSearchItems(result)
+        setSearchedQuery(debouncedSearchQuery)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setSearchItems([])
+        setSearchedQuery("")
+        setSearchError(errorMessage(error))
+      })
+      .finally(() => {
+        if (!cancelled) setSearching(false)
+      })
 
     return () => {
       cancelled = true
-      window.clearTimeout(timeout)
     }
-  }, [fakeid, trimmedQuery, refreshKey, contentSearchVersion])
+  }, [fakeid, debouncedSearchQuery, refreshKey, contentSearchVersion])
 
   const localFiltered = useMemo(() => {
     const s = trimmedQuery.toLowerCase()
@@ -204,11 +258,10 @@ export function ArticleList({
       : localFiltered
   const nextResumeLimit = nextResumeTarget(items.length)
   const collectionBusy = Boolean(fetchingAid) || resuming
-  const canResume =
-    Boolean(selectedAccount) &&
-    !loading &&
-    !collectionBusy &&
-    items.length < MAX_RESUME_LIMIT
+  const canRunCollectionAction =
+    Boolean(selectedAccount) && !loading && !collectionBusy
+  const canResume = canRunCollectionAction && items.length < MAX_RESUME_LIMIT
+  const canAudit = canRunCollectionAction && items.length > 0
 
   const cachedCount = useMemo(
     () => items.filter((item) => item.has_content).length,
@@ -252,23 +305,43 @@ export function ArticleList({
     }
   }
 
-  const resumeCollection = async () => {
-    if (!selectedAccount || !canResume) return
+  const resumeCollection = async (
+    mode: FetchMode,
+    auditSelection?: AuditSelection
+  ) => {
+    if (!selectedAccount) return
+    if (mode === "audit" ? !canAudit : !canResume) return
 
     const initialCount = items.length
-    const startEvent = initialResumeProgress(selectedAccount, nextResumeLimit)
+    const targetLimit = mode === "audit" ? MAX_RESUME_LIMIT : nextResumeLimit
+    const label = RESUME_MODE_LABELS[mode]
+    const auditDate = mode === "audit" ? (auditSelection?.date ?? null) : null
+    const startEvent = initialResumeProgress(
+      selectedAccount,
+      targetLimit,
+      mode,
+      auditDate
+    )
     resumeActiveRef.current = true
+    setResumeMode(mode)
+    setResumeLimit(targetLimit)
+    setResumeAuditDate(auditDate)
     setResumeProgressEvents([startEvent])
+    setCancellingResume(false)
     setResumeDialogOpen(true)
     setResuming(true)
     toast.info(
-      `正在续抓 ${selectedAccount.nickname}，目标索引 ${nextResumeLimit} 篇`
+      mode === "audit"
+        ? `正在检测 ${selectedAccount.nickname}${formatAuditDatePhrase(auditDate)}的文章完备性`
+        : `正在${label} ${selectedAccount.nickname}，目标索引 ${targetLimit} 篇`
     )
     try {
       await api.fetchSelectedAccount(
         accountToSearchResult(selectedAccount),
-        nextResumeLimit,
-        false
+        targetLimit,
+        false,
+        mode,
+        auditDate
       )
       const updatedItems = await api.listArticles(selectedAccount.fakeid)
       const sortedItems = [...updatedItems].sort(
@@ -279,9 +352,13 @@ export function ArticleList({
       onCollectionUpdated?.()
       const addedCount = sortedItems.length - initialCount
       const successMessage =
-        addedCount > 0
-          ? `续抓完成，新增 ${addedCount} 篇索引`
-          : "续抓完成，当前没有新增文章"
+        mode === "audit"
+          ? addedCount > 0
+            ? `${formatAuditDateScope(auditDate)}完备性检测完成，补漏 ${addedCount} 篇`
+            : `${formatAuditDateScope(auditDate)}完备性检测完成，未发现遗漏`
+          : addedCount > 0
+            ? `${label}完成，新增 ${addedCount} 篇索引`
+            : `${label}完成，当前没有新增文章`
       setResumeProgressEvents((current) =>
         appendProgressEvent(current, {
           fakeid: selectedAccount.fakeid,
@@ -289,14 +366,44 @@ export function ArticleList({
           stage: "complete",
           status: "done",
           message: successMessage,
-          current: nextResumeLimit,
-          total: nextResumeLimit,
+          current: targetLimit,
+          total: targetLimit,
           title: null,
         })
       )
       toast.success(successMessage)
     } catch (error) {
       const message = errorMessage(error)
+      if (isFetchInterruptedMessage(message)) {
+        const interruptedMessage =
+          mode === "audit" ? "完备性检测已打断" : `${label}已打断`
+        setResumeProgressEvents((current) =>
+          appendProgressEvent(current, {
+            fakeid: selectedAccount.fakeid,
+            nickname: selectedAccount.nickname,
+            stage: "cancel",
+            status: "warning",
+            message: interruptedMessage,
+            current: null,
+            total: targetLimit,
+            title: null,
+          })
+        )
+        try {
+          const updatedItems = await api.listArticles(selectedAccount.fakeid)
+          const sortedItems = sortedArticlesByCreateTime(updatedItems)
+          setItems(sortedItems)
+          setContentSearchVersion((current) => current + 1)
+          onCollectionUpdated?.()
+        } catch (refreshError) {
+          console.warn(
+            "Unable to refresh articles after fetch interruption",
+            refreshError
+          )
+        }
+        toast.info(interruptedMessage)
+        return
+      }
       setResumeProgressEvents((current) =>
         appendProgressEvent(current, {
           fakeid: selectedAccount.fakeid,
@@ -305,7 +412,7 @@ export function ArticleList({
           status: "error",
           message,
           current: null,
-          total: nextResumeLimit,
+          total: targetLimit,
           title: null,
         })
       )
@@ -313,6 +420,40 @@ export function ArticleList({
     } finally {
       resumeActiveRef.current = false
       setResuming(false)
+      setCancellingResume(false)
+    }
+  }
+
+  const interruptResume = async () => {
+    if (!selectedAccount || !resuming || cancellingResume) {
+      return
+    }
+
+    const label =
+      resumeMode === "audit" ? "完备性检测" : RESUME_MODE_LABELS[resumeMode]
+    setCancellingResume(true)
+    setResumeProgressEvents((current) =>
+      appendProgressEvent(current, {
+        fakeid: selectedAccount.fakeid,
+        nickname: selectedAccount.nickname,
+        stage: "cancel",
+        status: "warning",
+        message: `正在打断${label}`,
+        current: null,
+        total: resumeLimit,
+        title: null,
+      })
+    )
+
+    try {
+      const interrupted = await api.cancelFetchAccount(selectedAccount.fakeid)
+      if (!interrupted) {
+        setCancellingResume(false)
+        toast.info("当前没有可打断的抓取任务")
+      }
+    } catch (error) {
+      setCancellingResume(false)
+      toast.error(errorMessage(error))
     }
   }
 
@@ -336,22 +477,86 @@ export function ArticleList({
               )}
             </div>
           </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="mt-0.5 h-7 rounded-lg px-2.5"
-            disabled={!canResume}
-            title={`续抓到 ${nextResumeLimit} 篇索引`}
-            onClick={() => void resumeCollection()}
-          >
-            {resuming ? (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
-            ) : (
-              <PlayCircleIcon className="size-3.5" />
-            )}
-            {resuming ? "续抓中" : "续抓"}
-          </Button>
+          <div className="mt-0.5 inline-flex shrink-0">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="h-7 rounded-l-lg rounded-r-none border-r-0 px-2.5"
+              disabled={!canResume}
+              title={`向前续抓到 ${nextResumeLimit} 篇索引（最新方向）`}
+              onClick={() => void resumeCollection("forward")}
+            >
+              {resuming ? (
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+              ) : (
+                <PlayCircleIcon className="size-3.5" />
+              )}
+              {resuming ? `${RESUME_MODE_LABELS[resumeMode]}中` : "向前续抓"}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="h-7 rounded-l-none rounded-r-lg px-1.5"
+                  disabled={!canResume && !canAudit}
+                  aria-label="更多抓取选项"
+                  title="更多抓取选项"
+                >
+                  <ChevronDownIcon className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    void resumeCollection("forward")
+                  }}
+                  disabled={!canResume}
+                >
+                  <PlayCircleIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>向前续抓</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      从最新开始，目标 {nextResumeLimit} 篇
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    void resumeCollection("backward")
+                  }}
+                  disabled={!canResume || items.length === 0}
+                >
+                  <HistoryIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>向后续抓</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      从本地最老一篇之后向旧再抓 {RESUME_BATCH_SIZE} 篇
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    setAuditDialogOpen(true)
+                  }}
+                  disabled={!canAudit}
+                >
+                  <RefreshCwIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>检测完备性</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      选择日期，精确检测当天文章是否缺漏
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         <div className="search-shell relative rounded-lg">
           <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -510,12 +715,28 @@ export function ArticleList({
           onFetchContent={fetchArticleContent}
         />
       )}
+      {auditDialogOpen && selectedAccount ? (
+        <AuditDateDialog
+          account={selectedAccount}
+          busy={resuming}
+          items={items}
+          onClose={() => setAuditDialogOpen(false)}
+          onSubmit={(selection) => {
+            setAuditDialogOpen(false)
+            void resumeCollection("audit", selection)
+          }}
+        />
+      ) : null}
       {resumeDialogOpen && selectedAccount ? (
         <ResumeProgressDialog
           account={selectedAccount}
+          auditDate={resumeAuditDate}
           busy={resuming}
+          cancelling={cancellingResume}
           events={resumeProgressEvents}
-          limit={nextResumeLimit}
+          limit={resumeLimit}
+          mode={resumeMode}
+          onCancel={resuming ? interruptResume : undefined}
           onClose={() => setResumeDialogOpen(false)}
         />
       ) : null}
@@ -525,19 +746,30 @@ export function ArticleList({
 
 function ResumeProgressDialog({
   account,
+  auditDate,
   busy,
+  cancelling = false,
   events,
   limit,
+  mode,
+  onCancel,
   onClose,
 }: {
   account: Account
+  auditDate: string | null
   busy: boolean
+  cancelling?: boolean
   events: FetchAccountProgress[]
   limit: number
+  mode: FetchMode
+  onCancel?: () => void
   onClose: () => void
 }) {
+  const modeLabel = RESUME_MODE_LABELS[mode]
   const visibleEvents =
-    events.length > 0 ? events : [initialResumeProgress(account, limit)]
+    events.length > 0
+      ? events
+      : [initialResumeProgress(account, limit, mode, auditDate)]
   const latest = visibleEvents[visibleEvents.length - 1]
   const progressEvent =
     [...visibleEvents]
@@ -582,10 +814,13 @@ function ResumeProgressDialog({
               id="resume-progress-title"
               className="font-heading text-lg leading-tight font-semibold"
             >
-              续抓文章索引
+              {modeLabel}文章索引
             </div>
             <div className="mt-1 truncate text-xs text-muted-foreground">
-              {account.nickname} · 目标 {limit.toLocaleString()} 篇
+              {account.nickname} ·{" "}
+              {mode === "audit"
+                ? formatAuditDateScope(auditDate)
+                : `目标 ${limit.toLocaleString()} 篇`}
             </div>
           </div>
           <Button
@@ -673,14 +908,148 @@ function ResumeProgressDialog({
           })}
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex justify-end gap-2">
+          {busy && onCancel ? (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelling}
+              onClick={onCancel}
+            >
+              {cancelling ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : (
+                <XIcon className="size-4" />
+              )}
+              {cancelling ? "打断中" : "打断"}
+            </Button>
+          ) : null}
           <Button type="button" disabled={busy} onClick={onClose}>
             {busy ? (
               <LoaderCircleIcon className="size-4 animate-spin" />
             ) : (
               <CheckCircle2Icon className="size-4" />
             )}
-            {busy ? "续抓中" : "完成"}
+            {busy ? `${modeLabel}中` : "完成"}
+          </Button>
+        </div>
+      </section>
+    </div>,
+    document.body
+  )
+}
+
+function AuditDateDialog({
+  account,
+  busy,
+  items,
+  onClose,
+  onSubmit,
+}: {
+  account: Account
+  busy: boolean
+  items: ArticleSummary[]
+  onClose: () => void
+  onSubmit: (selection: AuditSelection) => void
+}) {
+  const auditableItems = useMemo(
+    () => sortedArticlesByCreateTime(items).slice(0, MAX_RESUME_LIMIT),
+    [items]
+  )
+  const newestDate = auditableItems[0]
+    ? formatDate(auditableItems[0].create_time)
+    : currentDateInputValue()
+  const oldestDate = auditableItems[auditableItems.length - 1]
+    ? formatDate(auditableItems[auditableItems.length - 1].create_time)
+    : newestDate
+  const [selectedDate, setSelectedDate] = useState(oldestDate)
+  const normalizedDate = clampDateInput(selectedDate, oldestDate, newestDate)
+  const dayArticleCount = auditDayCountForDate(auditableItems, normalizedDate)
+  const canSubmit = Boolean(normalizedDate) && !busy
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 px-4 backdrop-blur-sm"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose()
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="audit-date-title"
+        className="dialog-panel w-full max-w-[520px] rounded-xl p-4 text-card-foreground shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div
+              id="audit-date-title"
+              className="font-heading text-lg leading-tight font-semibold"
+            >
+              检测完备性
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {account.nickname}
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-8"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <XIcon className="size-4" />
+          </Button>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          <Label htmlFor="audit-check-date">检测日期</Label>
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Input
+              id="audit-check-date"
+              type="date"
+              min={oldestDate}
+              max={newestDate}
+              value={selectedDate}
+              disabled={busy}
+              onChange={(event) => setSelectedDate(event.target.value)}
+            />
+            <div className="flex min-h-8 items-center rounded-lg border border-border/70 bg-muted/30 px-3 text-xs text-muted-foreground">
+              {oldestDate} 至 {newestDate}
+            </div>
+          </div>
+          <div className="text-xs leading-5 text-muted-foreground">
+            将检测 {normalizedDate || "所选日期"} 当天的所有文章，当前本地当天{" "}
+            <span className="font-mono text-foreground">
+              {dayArticleCount.toLocaleString()}
+            </span>{" "}
+            篇；执行时由 wcx 按日期边界自动覆盖当天。
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={onClose}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            disabled={!canSubmit}
+            onClick={() =>
+              onSubmit({
+                date: normalizedDate,
+              })
+            }
+          >
+            <RefreshCwIcon className="size-4" />
+            开始检测
           </Button>
         </div>
       </section>
@@ -731,14 +1100,23 @@ function ProgressStateIcon({
 
 function initialResumeProgress(
   account: Pick<Account, "fakeid" | "nickname">,
-  limit: number
+  limit: number,
+  mode: FetchMode = "forward",
+  auditDate: string | null = null
 ): FetchAccountProgress {
+  const label = RESUME_MODE_LABELS[mode]
+  const message =
+    mode === "audit"
+      ? auditDate
+        ? `准备${label}，检测 ${auditDate} 当天`
+        : `准备${label}，目标重扫 ${limit.toLocaleString()} 篇索引`
+      : `准备${label}到 ${limit.toLocaleString()} 篇文章索引`
   return {
     fakeid: account.fakeid,
     nickname: account.nickname,
     stage: "prepare",
     status: "running",
-    message: `准备续抓到 ${limit.toLocaleString()} 篇文章索引`,
+    message,
     current: 0,
     total: limit,
     title: null,
@@ -771,6 +1149,59 @@ function nextResumeTarget(currentCount: number) {
   return Math.min(
     Math.max(normalizedCount + RESUME_BATCH_SIZE, RESUME_BATCH_SIZE),
     MAX_RESUME_LIMIT
+  )
+}
+
+function sortedArticlesByCreateTime(items: ArticleSummary[]) {
+  return [...items].sort((a, b) => b.create_time - a.create_time)
+}
+
+function auditDayCountForDate(items: ArticleSummary[], dateInput: string) {
+  const range = dateUnixRange(dateInput)
+  if (!range) return 0
+  const [start, end] = range
+  return items.filter(
+    (item) => item.create_time >= start && item.create_time < end
+  ).length
+}
+
+function dateUnixRange(dateInput: string): [number, number] | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) return null
+  const [year, month, day] = dateInput.split("-").map(Number)
+  const start = new Date(year, month - 1, day).getTime() / 1000
+  const end = new Date(year, month - 1, day + 1).getTime() / 1000
+  return [start, end]
+}
+
+function clampDateInput(value: string, min: string, max: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return ""
+  if (value < min) return min
+  if (value > max) return max
+  return value
+}
+
+function currentDateInputValue() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function formatAuditDateScope(date: string | null) {
+  return date ? `检测 ${date} 当天` : "检测当前区间"
+}
+
+function formatAuditDatePhrase(date: string | null) {
+  return date ? ` ${date} 当天` : ""
+}
+
+function isFetchInterruptedMessage(message: string) {
+  const normalized = message.toLowerCase()
+  return (
+    message.includes("已打断") ||
+    normalized.includes("cancelled") ||
+    normalized.includes("canceled")
   )
 }
 
@@ -1039,6 +1470,35 @@ function accountToSearchResult(account: Account): AccountSearchResult {
     alias: account.alias,
     signature: account.signature,
     avatar: account.avatar,
+  }
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedValue(value), delayMs)
+    return () => window.clearTimeout(timeout)
+  }, [delayMs, value])
+
+  return debouncedValue
+}
+
+function articleSearchCacheKey(
+  fakeid: string,
+  query: string,
+  contentSearchVersion: number
+) {
+  return `${fakeid}:${contentSearchVersion}:${query}`
+}
+
+function pruneArticleSearchCache(cache: Map<string, ArticleSummary[]>) {
+  const maxEntries = 40
+  if (cache.size <= maxEntries) return
+
+  for (const key of cache.keys()) {
+    cache.delete(key)
+    if (cache.size <= maxEntries) return
   }
 }
 

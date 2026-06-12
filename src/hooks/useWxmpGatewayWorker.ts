@@ -5,6 +5,7 @@ import {
   api,
   type AccountSearchResult,
   type FetchAccountResult,
+  type FetchMode,
 } from "@/lib/api"
 import {
   claimGatewayRequest,
@@ -124,7 +125,9 @@ async function executeFetchSelectedAccount(payload: Json): Promise<Json> {
   const result = await api.fetchSelectedAccount(
     input.account,
     input.limit,
-    input.withContent
+    input.withContent,
+    input.mode,
+    input.auditDate
   )
   const articles = await api.listArticles(input.account.fakeid)
   const selectedArticles = articles.slice(0, input.limit)
@@ -142,6 +145,8 @@ async function executeFetchSelectedAccount(payload: Json): Promise<Json> {
     account: input.account,
     limit: input.limit,
     with_content: input.withContent,
+    mode: input.mode,
+    audit_date: input.auditDate,
     stdout: result.stdout,
     stderr: result.stderr,
     articles: articlePayload,
@@ -197,6 +202,8 @@ function parseFetchSelectedAccountPayload(payload: Json) {
     } satisfies AccountSearchResult,
     limit: positiveInt(object.limit, 20, 500),
     withContent: booleanValue(object.with_content),
+    mode: fetchModeValue(object.mode),
+    auditDate: nullableString(object.audit_date),
   }
 }
 
@@ -248,6 +255,12 @@ function nullableString(value: Json | undefined) {
 
 function booleanValue(value: Json | undefined) {
   return value === true
+}
+
+function fetchModeValue(value: Json | undefined): FetchMode {
+  const text = stringValue(value)
+  if (text === "backward" || text === "audit") return text
+  return "forward"
 }
 
 function positiveInt(value: Json | undefined, fallback: number, max: number) {

@@ -18,7 +18,34 @@ pub fn config_path() -> Result<PathBuf> {
 fn open() -> Result<Connection> {
     let p = cache_db_path()?;
     let conn = Connection::open(&p).with_context(|| format!("open {:?}", p))?;
+    ensure_runtime_indexes(&conn)?;
     Ok(conn)
+}
+
+fn ensure_runtime_indexes(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "articles")? || !table_exists(conn, "accounts")? {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_articles_fakeid_create_time
+             ON articles(fakeid, create_time DESC);
+         CREATE INDEX IF NOT EXISTS idx_accounts_updated_at
+             ON accounts(updated_at DESC);",
+    )?;
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    Ok(exists)
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -147,15 +174,16 @@ fn article_search_summary_from_row(row: &Row<'_>, query: &str) -> rusqlite::Resu
     let mut article = article_summary_from_row(row)?;
     let content_md: Option<String> = row.get(9)?;
     let content_html: Option<String> = row.get(10)?;
+    let query_lower = query.to_lowercase();
 
-    if text_matches(&article.title, query) {
+    if text_matches_lower(&article.title, &query_lower) {
         article.match_fields.push("title".to_string());
     }
 
     if article
         .digest
         .as_deref()
-        .is_some_and(|digest| text_matches(digest, query))
+        .is_some_and(|digest| text_matches_lower(digest, &query_lower))
     {
         article.match_fields.push("digest".to_string());
     }
@@ -163,27 +191,27 @@ fn article_search_summary_from_row(row: &Row<'_>, query: &str) -> rusqlite::Resu
     if article
         .author
         .as_deref()
-        .is_some_and(|author| text_matches(author, query))
+        .is_some_and(|author| text_matches_lower(author, &query_lower))
     {
         article.match_fields.push("author".to_string());
     }
 
     let content_excerpt = content_md
         .as_deref()
-        .and_then(|content| match_excerpt(content, query))
+        .and_then(|content| match_excerpt(content, query, &query_lower))
         .or_else(|| {
             content_html
                 .as_deref()
-                .and_then(|content| match_excerpt(&strip_html_tags(content), query))
+                .and_then(|content| match_excerpt(&strip_html_tags(content), query, &query_lower))
         });
 
     if content_excerpt.is_some()
         || content_md
             .as_deref()
-            .is_some_and(|content| text_matches(content, query))
+            .is_some_and(|content| text_matches_lower(content, &query_lower))
         || content_html
             .as_deref()
-            .is_some_and(|content| text_matches(content, query))
+            .is_some_and(|content| text_matches_lower(content, &query_lower))
     {
         article.match_fields.push("content".to_string());
     }
@@ -192,7 +220,7 @@ fn article_search_summary_from_row(row: &Row<'_>, query: &str) -> rusqlite::Resu
         article
             .digest
             .as_deref()
-            .and_then(|text| match_excerpt(text, query))
+            .and_then(|text| match_excerpt(text, query, &query_lower))
     });
 
     Ok(article)
@@ -230,13 +258,13 @@ fn like_pattern(value: &str) -> String {
     escaped
 }
 
-fn text_matches(text: &str, query: &str) -> bool {
-    text.to_lowercase().contains(&query.to_lowercase())
+fn text_matches_lower(text: &str, query_lower: &str) -> bool {
+    text.to_lowercase().contains(query_lower)
 }
 
-fn match_excerpt(text: &str, query: &str) -> Option<String> {
+fn match_excerpt(text: &str, query: &str, query_lower: &str) -> Option<String> {
     let text = collapse_whitespace(text);
-    let (start, end) = find_match_range(&text, query)?;
+    let (start, end) = find_match_range(&text, query, query_lower)?;
     let chars = text.chars().collect::<Vec<_>>();
     let excerpt_start = start.saturating_sub(36);
     let excerpt_end = chars.len().min(end + 72);
@@ -253,7 +281,7 @@ fn match_excerpt(text: &str, query: &str) -> Option<String> {
     Some(excerpt)
 }
 
-fn find_match_range(text: &str, query: &str) -> Option<(usize, usize)> {
+fn find_match_range(text: &str, query: &str, query_lower: &str) -> Option<(usize, usize)> {
     let text_chars = text.chars().collect::<Vec<_>>();
     let query_chars = query.chars().collect::<Vec<_>>();
     let query_len = query_chars.len();
@@ -262,7 +290,6 @@ fn find_match_range(text: &str, query: &str) -> Option<(usize, usize)> {
         return None;
     }
 
-    let query_lower = query.to_lowercase();
     for start in 0..=text_chars.len().saturating_sub(query_len) {
         let candidate = text_chars[start..start + query_len]
             .iter()

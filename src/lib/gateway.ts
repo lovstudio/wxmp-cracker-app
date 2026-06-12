@@ -224,6 +224,8 @@ export function enqueueGatewayFetchSelectedAccount(input: {
   }
   limit: number
   withContent: boolean
+  mode?: "forward" | "backward" | "audit"
+  auditDate?: string | null
   priority?: number
   idempotencyKey?: string | null
 }) {
@@ -235,6 +237,8 @@ export function enqueueGatewayFetchSelectedAccount(input: {
       account: input.account,
       limit: input.limit,
       with_content: input.withContent,
+      mode: input.mode ?? "forward",
+      audit_date: input.auditDate ?? null,
     },
     priority: input.priority,
     idempotencyKey: input.idempotencyKey,

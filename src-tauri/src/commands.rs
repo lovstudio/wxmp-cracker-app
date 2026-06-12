@@ -1,11 +1,17 @@
+use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
 
@@ -24,7 +30,13 @@ pub struct FetchAccountResult {
     pub stderr: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
+pub struct ArticleLocalFile {
+    pub path: String,
+    pub exists: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub struct AccountSearchResult {
     pub fakeid: String,
     pub nickname: String,
@@ -59,6 +71,81 @@ struct ArticleContentPayload {
 
 const FETCH_ACCOUNT_PROGRESS_EVENT: &str = "fetch-account://progress";
 const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
+const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
+const ACCOUNT_SEARCH_CACHE_MAX_ITEMS: usize = 64;
+const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
+const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
+const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(12);
+
+#[derive(Clone)]
+struct ActiveFetchProcess {
+    account: AccountSearchResult,
+    cancel_requested: Arc<AtomicBool>,
+    pid: u32,
+}
+
+struct ActiveFetchGuard {
+    fakeid: String,
+    pid: u32,
+}
+
+#[derive(Clone)]
+struct CachedAccountSearch {
+    created_at: Instant,
+    results: Vec<AccountSearchResult>,
+}
+
+#[derive(Deserialize)]
+struct WechatSearchResponse {
+    #[serde(default)]
+    base_resp: Option<WechatBaseResponse>,
+    #[serde(default)]
+    list: Vec<WechatSearchAccount>,
+}
+
+#[derive(Deserialize)]
+struct WechatBaseResponse {
+    #[serde(default)]
+    ret: i64,
+    #[serde(default)]
+    err_msg: String,
+}
+
+#[derive(Deserialize)]
+struct WechatSearchAccount {
+    #[serde(default)]
+    fakeid: String,
+    #[serde(default)]
+    nickname: String,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    round_head_img: Option<String>,
+}
+
+static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess>>> =
+    OnceLock::new();
+static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
+    OnceLock::new();
+static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+
+impl Drop for ActiveFetchGuard {
+    fn drop(&mut self) {
+        let mut processes = active_fetch_processes()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if processes
+            .get(&self.fakeid)
+            .is_some_and(|active| active.pid == self.pid)
+        {
+            processes.remove(&self.fakeid);
+        }
+    }
+}
 
 impl From<anyhow::Error> for CmdError {
     fn from(e: anyhow::Error) -> Self {
@@ -136,6 +223,25 @@ pub fn cache_db_path() -> Result<String, CmdError> {
         .map_err(Into::into)
 }
 
+#[tauri::command]
+pub fn article_local_file(aid: String) -> Result<Option<ArticleLocalFile>, CmdError> {
+    let aid = aid.trim().to_string();
+    if aid.is_empty() {
+        return Err(CmdError {
+            message: "缺少文章 ID".to_string(),
+        });
+    }
+
+    archive::article_local_file_path(&aid)
+        .map(|path| {
+            path.map(|path| ArticleLocalFile {
+                exists: path.exists(),
+                path: path.display().to_string(),
+            })
+        })
+        .map_err(Into::into)
+}
+
 fn normalize_optional_account_id(account_id: Option<String>) -> Option<String> {
     account_id
         .map(|value| value.trim().to_string())
@@ -151,43 +257,173 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
         });
     }
 
+    let cache_key = account_search_cache_key(&query);
+    if let Some(results) = cached_account_search(&cache_key) {
+        return Ok(results);
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
-        let wcx = locate_wcx().map_err(|message| CmdError { message })?;
-        let output = Command::new(&wcx)
-            .arg("search-accounts-json")
-            .arg(&query)
-            .output()
-            .map_err(|e| CmdError {
-                message: format!("运行 wcx search 失败: {e}"),
-            })?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if !output.status.success() {
-            let detail = first_nonempty_line(&stderr)
-                .or_else(|| first_nonempty_line(&stdout))
-                .unwrap_or_else(|| format!("wcx search 退出码: {}", output.status));
-            return Err(CmdError { message: detail });
+        if let Some(results) = cached_account_search(&cache_key) {
+            return Ok(results);
         }
 
-        let payload = stdout
-            .lines()
-            .rev()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .ok_or_else(|| CmdError {
-                message: "wcx search 没有输出".to_string(),
-            })?;
+        let results = match search_accounts_direct(&query) {
+            Ok(results) => results,
+            Err(error) if is_terminal_wechat_search_error(&error.message) => return Err(error),
+            Err(error) => {
+                log::warn!("direct WeChat account search failed; falling back to wcx: {error}");
+                search_accounts_via_wcx(&query)?
+            }
+        };
 
-        serde_json::from_str::<Vec<AccountSearchResult>>(payload).map_err(|e| CmdError {
-            message: format!("解析 wcx search 结果失败: {e}"),
-        })
+        remember_account_search(cache_key, &results);
+        Ok(results)
     })
     .await
     .map_err(|e| CmdError {
-        message: format!("wcx search 任务失败: {e}"),
+        message: format!("公众号搜索任务失败: {e}"),
     })?
+}
+
+fn search_accounts_direct(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
+    let config = auth::read_config().ok_or_else(|| CmdError {
+        message: "尚未登录，请先扫码登录".to_string(),
+    })?;
+    let token = config.token.trim();
+    let cookie = config.cookie.trim();
+    if token.is_empty() || cookie.is_empty() {
+        return Err(CmdError {
+            message: "尚未登录，请先扫码登录".to_string(),
+        });
+    }
+
+    let url = format!(
+        "{WECHAT_SEARCH_BIZ_URL}?action=search_biz&begin=0&count=5&query={}&token={}&lang=zh_CN&f=json&ajax=1",
+        urlencoding::encode(query),
+        urlencoding::encode(token),
+    );
+
+    let response = wechat_search_client()?
+        .get(url)
+        .header(COOKIE, cookie)
+        .send()
+        .map_err(|error| CmdError {
+            message: format!("微信搜索请求失败: {error}"),
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(CmdError {
+            message: format!("微信搜索 HTTP {status}: {}", truncate_for_error(&body, 200)),
+        });
+    }
+
+    let payload = response
+        .json::<WechatSearchResponse>()
+        .map_err(|error| CmdError {
+            message: format!("解析微信搜索结果失败: {error}"),
+        })?;
+    let ret = payload.base_resp.as_ref().map(|resp| resp.ret).unwrap_or(0);
+    if ret != 0 {
+        let message = payload
+            .base_resp
+            .as_ref()
+            .map(|resp| resp.err_msg.trim())
+            .filter(|message| !message.is_empty())
+            .unwrap_or("unknown");
+        if ret == 200013 {
+            return Err(CmdError {
+                message: format!("触发风控：Rate limited (ret=200013): {message}. Wait >= 1 hour."),
+            });
+        }
+        if matches!(ret, 200003 | 200002 | 200008) {
+            return Err(CmdError {
+                message: format!("认证失败：Auth failed (ret={ret}): {message}. Re-login needed."),
+            });
+        }
+        return Err(CmdError {
+            message: format!("微信搜索 API error ret={ret}: {message}"),
+        });
+    }
+
+    Ok(payload
+        .list
+        .into_iter()
+        .map(|account| AccountSearchResult {
+            fakeid: account.fakeid,
+            nickname: account.nickname,
+            alias: account.alias,
+            signature: account.signature,
+            avatar: account.round_head_img,
+        })
+        .filter(|account| !account.fakeid.is_empty() && !account.nickname.is_empty())
+        .collect())
+}
+
+fn search_accounts_via_wcx(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
+    let wcx = locate_wcx().map_err(|message| CmdError { message })?;
+    let output = Command::new(&wcx)
+        .arg("search-accounts-json")
+        .arg(query)
+        .output()
+        .map_err(|e| CmdError {
+            message: format!("运行 wcx search 失败: {e}"),
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        let detail = first_nonempty_line(&stderr)
+            .or_else(|| first_nonempty_line(&stdout))
+            .unwrap_or_else(|| format!("wcx search 退出码: {}", output.status));
+        return Err(CmdError { message: detail });
+    }
+
+    let payload = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| CmdError {
+            message: "wcx search 没有输出".to_string(),
+        })?;
+
+    serde_json::from_str::<Vec<AccountSearchResult>>(payload).map_err(|e| CmdError {
+        message: format!("解析 wcx search 结果失败: {e}"),
+    })
+}
+
+fn wechat_search_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
+    WECHAT_SEARCH_CLIENT
+        .get_or_init(build_wechat_search_client)
+        .as_ref()
+        .map_err(|message| CmdError {
+            message: message.clone(),
+        })
+}
+
+fn build_wechat_search_client() -> Result<reqwest::blocking::Client, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(WECHAT_USER_AGENT));
+    headers.insert(REFERER, HeaderValue::from_static(WECHAT_REFERER_URL));
+
+    reqwest::blocking::Client::builder()
+        .default_headers(headers)
+        .timeout(WECHAT_DIRECT_SEARCH_TIMEOUT)
+        .build()
+        .map_err(|error| format!("初始化微信搜索客户端失败: {error}"))
+}
+
+fn is_terminal_wechat_search_error(message: &str) -> bool {
+    message.starts_with("尚未登录")
+        || message.starts_with("认证失败")
+        || message.starts_with("触发风控")
+}
+
+fn truncate_for_error(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 #[tauri::command]
@@ -245,6 +481,8 @@ pub async fn fetch_selected_account(
     account: AccountSearchResult,
     limit: Option<u32>,
     with_content: bool,
+    mode: Option<String>,
+    audit_date: Option<String>,
 ) -> Result<FetchAccountResult, CmdError> {
     if account.fakeid.trim().is_empty() || account.nickname.trim().is_empty() {
         return Err(CmdError {
@@ -253,15 +491,46 @@ pub async fn fetch_selected_account(
     }
 
     let limit = limit.unwrap_or(20).clamp(1, 500);
+    let mode = mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("forward")
+        .to_string();
+    if !matches!(mode.as_str(), "forward" | "backward" | "audit") {
+        return Err(CmdError {
+            message: format!("未知抓取模式：{mode}"),
+        });
+    }
+    let audit_date = audit_date
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if audit_date.is_some() && mode != "audit" {
+        return Err(CmdError {
+            message: "--audit-date 只能用于完备性回扫".to_string(),
+        });
+    }
+    if let Some(date) = audit_date.as_deref() {
+        if !is_iso_date(date) {
+            return Err(CmdError {
+                message: format!("日期格式应为 YYYY-MM-DD：{date}"),
+            });
+        }
+    }
 
     tauri::async_runtime::spawn_blocking(move || {
+        let prepare_msg = match mode.as_str() {
+            "backward" => "正在启动向后续抓任务",
+            "audit" => "正在启动完备性回扫任务",
+            _ => "正在启动抓取任务",
+        };
         emit_fetch_progress(
             &app,
             fetch_progress(
                 &account,
                 "prepare",
                 "running",
-                "正在启动抓取任务",
+                prepare_msg,
                 None,
                 Some(limit),
                 None,
@@ -276,7 +545,12 @@ pub async fn fetch_selected_account(
         cmd.arg("fetch-selected-account-json")
             .arg(account_json)
             .arg(limit.to_string())
-            .arg(if with_content { "1" } else { "0" });
+            .arg(if with_content { "1" } else { "0" })
+            .arg("--mode")
+            .arg(&mode);
+        if let Some(date) = audit_date {
+            cmd.arg("--audit-date").arg(date);
+        }
 
         run_fetch_progress_command(&app, &account, cmd)
     })
@@ -284,6 +558,60 @@ pub async fn fetch_selected_account(
     .map_err(|e| CmdError {
         message: format!("wcx 精确抓取任务失败: {e}"),
     })?
+}
+
+#[tauri::command]
+pub fn cancel_fetch_account(app: AppHandle, fakeid: String) -> Result<bool, CmdError> {
+    let fakeid = fakeid.trim().to_string();
+    if fakeid.is_empty() {
+        return Err(CmdError {
+            message: "缺少公众号 fakeid".to_string(),
+        });
+    }
+
+    let active = {
+        let processes = active_fetch_processes()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        processes.get(&fakeid).cloned()
+    };
+
+    let Some(active) = active else {
+        return Ok(false);
+    };
+
+    active.cancel_requested.store(true, Ordering::SeqCst);
+    emit_fetch_progress(
+        &app,
+        fetch_progress(
+            &active.account,
+            "cancel",
+            "warning",
+            "正在打断当前抓取任务",
+            None,
+            None,
+            None,
+        ),
+    );
+
+    if let Err(message) = terminate_process(active.pid) {
+        active.cancel_requested.store(false, Ordering::SeqCst);
+        return Err(CmdError {
+            message: format!("打断 wcx 抓取失败: {message}"),
+        });
+    }
+
+    Ok(true)
+}
+
+fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
 }
 
 #[tauri::command]
@@ -357,7 +685,63 @@ pub async fn fetch_article_content(
     })?
 }
 
+fn account_search_cache() -> &'static Mutex<HashMap<String, CachedAccountSearch>> {
+    ACCOUNT_SEARCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn account_search_cache_key(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
+fn cached_account_search(key: &str) -> Option<Vec<AccountSearchResult>> {
+    let mut cache = account_search_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let Some(entry) = cache.get(key) else {
+        return None;
+    };
+
+    if entry.created_at.elapsed() <= ACCOUNT_SEARCH_CACHE_TTL {
+        return Some(entry.results.clone());
+    }
+
+    cache.remove(key);
+    None
+}
+
+fn remember_account_search(key: String, results: &[AccountSearchResult]) {
+    let mut cache = account_search_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = Instant::now();
+
+    cache.retain(|_, entry| now.duration_since(entry.created_at) <= ACCOUNT_SEARCH_CACHE_TTL);
+
+    if cache.len() >= ACCOUNT_SEARCH_CACHE_MAX_ITEMS {
+        if let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.created_at)
+            .map(|(cache_key, _)| cache_key.clone())
+        {
+            cache.remove(&oldest_key);
+        }
+    }
+
+    cache.insert(
+        key,
+        CachedAccountSearch {
+            created_at: now,
+            results: results.to_vec(),
+        },
+    );
+}
+
 fn locate_wcx() -> Result<PathBuf, String> {
+    if let Some(cached) = cached_wcx_path() {
+        return Ok(cached);
+    }
+
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(bin) = env::var("WCX_BIN") {
@@ -389,7 +773,10 @@ fn locate_wcx() -> Result<PathBuf, String> {
         }
 
         match Command::new(&candidate).arg("--version").output() {
-            Ok(output) if output.status.success() => return Ok(candidate),
+            Ok(output) if output.status.success() => {
+                remember_wcx_path(&candidate);
+                return Ok(candidate);
+            }
             Ok(output) => failures.push(format_wcx_failure(&candidate, &output)),
             Err(e) => failures.push(format!("{}: {e}", candidate.display())),
         }
@@ -403,6 +790,23 @@ fn locate_wcx() -> Result<PathBuf, String> {
             failures.join("；")
         ))
     }
+}
+
+fn wcx_path_cache() -> &'static Mutex<Option<PathBuf>> {
+    WCX_PATH_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn cached_wcx_path() -> Option<PathBuf> {
+    wcx_path_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn remember_wcx_path(path: &Path) {
+    *wcx_path_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path.to_path_buf());
 }
 
 fn format_wcx_failure(candidate: &Path, output: &Output) -> String {
@@ -490,6 +894,7 @@ fn run_fetch_progress_command(
             );
             CmdError { message }
         })?;
+    let (_active_fetch, cancel_requested) = register_active_fetch(account, child.id());
 
     let stdout = child.stdout.take().ok_or_else(|| CmdError {
         message: "无法读取 wcx 抓取输出".to_string(),
@@ -507,9 +912,15 @@ fn run_fetch_progress_command(
 
     let mut stdout_text = String::new();
     for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|e| CmdError {
-            message: format!("读取 wcx 抓取输出失败: {e}"),
-        })?;
+        let line = match line {
+            Ok(line) => line,
+            Err(_e) if cancel_requested.load(Ordering::SeqCst) => break,
+            Err(e) => {
+                return Err(CmdError {
+                    message: format!("读取 wcx 抓取输出失败: {e}"),
+                });
+            }
+        };
         stdout_text.push_str(&line);
         stdout_text.push('\n');
 
@@ -527,6 +938,17 @@ fn run_fetch_progress_command(
     let stderr_text = stderr_handle.join().unwrap_or_default();
 
     if !status.success() {
+        if cancel_requested.load(Ordering::SeqCst) {
+            let message = "当前抓取任务已打断";
+            emit_fetch_progress(
+                app,
+                fetch_progress(account, "cancel", "warning", message, None, None, None),
+            );
+            return Err(CmdError {
+                message: message.to_string(),
+            });
+        }
+
         let detail = first_nonempty_line(&stderr_text)
             .or_else(|| first_nonempty_line(&stdout_text))
             .unwrap_or_else(|| format!("wcx 精确抓取退出码: {status}"));
@@ -541,6 +963,75 @@ fn run_fetch_progress_command(
         stdout: stdout_text,
         stderr: stderr_text,
     })
+}
+
+fn active_fetch_processes() -> &'static Mutex<HashMap<String, ActiveFetchProcess>> {
+    ACTIVE_FETCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_active_fetch(
+    account: &AccountSearchResult,
+    pid: u32,
+) -> (ActiveFetchGuard, Arc<AtomicBool>) {
+    let cancel_requested = Arc::new(AtomicBool::new(false));
+    let active = ActiveFetchProcess {
+        account: account.clone(),
+        cancel_requested: Arc::clone(&cancel_requested),
+        pid,
+    };
+
+    let mut processes = active_fetch_processes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    processes.insert(account.fakeid.clone(), active);
+
+    (
+        ActiveFetchGuard {
+            fakeid: account.fakeid.clone(),
+            pid,
+        },
+        cancel_requested,
+    )
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let output = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .output()
+        .map_err(|e| format!("执行 kill 失败: {e}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(first_nonempty_line(&stderr)
+        .or_else(|| first_nonempty_line(&stdout))
+        .unwrap_or_else(|| format!("kill 退出码: {}", output.status)))
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let output = Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .arg("/F")
+        .output()
+        .map_err(|e| format!("执行 taskkill 失败: {e}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(first_nonempty_line(&stderr)
+        .or_else(|| first_nonempty_line(&stdout))
+        .unwrap_or_else(|| format!("taskkill 退出码: {}", output.status)))
 }
 
 fn emit_fetch_progress(app: &AppHandle, progress: FetchAccountProgress) {
@@ -600,9 +1091,7 @@ pub async fn github_oauth_start() -> Result<github::DeviceCodeStart, CmdError> {
 }
 
 #[tauri::command]
-pub async fn github_oauth_poll(
-    device_code: String,
-) -> Result<github::DevicePollOutcome, CmdError> {
+pub async fn github_oauth_poll(device_code: String) -> Result<github::DevicePollOutcome, CmdError> {
     github::device_poll(&device_code).await.map_err(Into::into)
 }
 
@@ -626,7 +1115,9 @@ pub async fn github_create_repo(
     name: String,
     private: bool,
 ) -> Result<github::RepoBrief, CmdError> {
-    github::create_repo(&name, private).await.map_err(Into::into)
+    github::create_repo(&name, private)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
