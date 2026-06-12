@@ -67,16 +67,21 @@ interface AuditSelection {
 
 type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 
+type CollectionTask = FetchMode | "content"
+
 const MAX_RESUME_PROGRESS_EVENTS = 24
 const RESUME_BATCH_SIZE = 20
 const MAX_RESUME_LIMIT = 500
 const MIN_CONTENT_SEARCH_LENGTH = 2
 const CONTENT_SEARCH_DEBOUNCE_MS = 220
+const CONTENT_FILL_INTERVAL_MS = 1200
+const MAX_CONTENT_FILL_FAILURES = 3
 
-const RESUME_MODE_LABELS: Record<FetchMode, string> = {
+const RESUME_MODE_LABELS: Record<CollectionTask, string> = {
   forward: "向前续抓",
   backward: "向后续抓",
   audit: "完备性回扫",
+  content: "补齐正文",
 }
 
 export function ArticleList({
@@ -91,7 +96,7 @@ export function ArticleList({
   const [items, setItems] = useState<ArticleSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [resuming, setResuming] = useState(false)
-  const [resumeMode, setResumeMode] = useState<FetchMode>("forward")
+  const [resumeMode, setResumeMode] = useState<CollectionTask>("forward")
   const [resumeLimit, setResumeLimit] = useState(RESUME_BATCH_SIZE)
   const [resumeAuditDate, setResumeAuditDate] = useState<string | null>(null)
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
@@ -110,6 +115,7 @@ export function ArticleList({
   const [contentSearchVersion, setContentSearchVersion] = useState(0)
   const selectedAccount = account?.fakeid === fakeid ? account : null
   const resumeActiveRef = useRef(false)
+  const contentFillCancelRef = useRef(false)
   const articleSearchCacheRef = useRef(new Map<string, ArticleSummary[]>())
 
   useEffect(() => {
@@ -267,6 +273,8 @@ export function ArticleList({
     () => items.filter((item) => item.has_content).length,
     [items]
   )
+  const missingContentCount = items.length - cachedCount
+  const canFillContent = canRunCollectionAction && missingContentCount > 0
 
   const fetchArticleContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
@@ -424,8 +432,170 @@ export function ArticleList({
     }
   }
 
+  const fillMissingContents = async () => {
+    if (!selectedAccount || !canFillContent) return
+
+    const missing = sortedArticlesByCreateTime(items).filter(
+      (item) => !item.has_content
+    )
+    if (missing.length === 0) return
+
+    const total = missing.length
+    const pushEvent = (
+      event: Omit<FetchAccountProgress, "fakeid" | "nickname">
+    ) =>
+      setResumeProgressEvents((current) =>
+        appendProgressEvent(current, {
+          fakeid: selectedAccount.fakeid,
+          nickname: selectedAccount.nickname,
+          ...event,
+        })
+      )
+
+    contentFillCancelRef.current = false
+    setResumeMode("content")
+    setResumeLimit(total)
+    setResumeAuditDate(null)
+    setResumeProgressEvents([
+      {
+        fakeid: selectedAccount.fakeid,
+        nickname: selectedAccount.nickname,
+        stage: "prepare",
+        status: "done",
+        message: `共 ${total.toLocaleString()} 篇文章缺失正文，开始补齐`,
+        current: 0,
+        total,
+        title: null,
+      },
+    ])
+    setCancellingResume(false)
+    setResumeDialogOpen(true)
+    setResuming(true)
+    toast.info(`正在补齐 ${selectedAccount.nickname} 的 ${total} 篇正文`)
+
+    let succeeded = 0
+    let failed = 0
+    let consecutiveFailures = 0
+
+    try {
+      for (const [index, article] of missing.entries()) {
+        if (contentFillCancelRef.current) break
+        if (index > 0) {
+          // 篇间节流，避免高频请求触发微信风控
+          await sleep(CONTENT_FILL_INTERVAL_MS)
+          if (contentFillCancelRef.current) break
+        }
+
+        setFetchingAid(article.aid)
+        pushEvent({
+          stage: "content",
+          status: "running",
+          message: "正在抓取正文",
+          current: index,
+          total,
+          title: article.title,
+        })
+
+        try {
+          const updated = await runWithProviderExecutionReport(
+            {
+              endpoint: "fetch_article_content",
+              observedValue: {
+                aid: article.aid,
+                fakeid: article.fakeid,
+                force: false,
+              },
+              targetFakeid: article.fakeid,
+            },
+            () => api.fetchArticleContent(article.aid, false)
+          )
+          setItems((current) =>
+            current.map((item) =>
+              item.aid === updated.aid
+                ? { ...item, has_content: updated.has_content }
+                : item
+            )
+          )
+          onContentFetched?.(updated.aid)
+          succeeded += 1
+          consecutiveFailures = 0
+          pushEvent({
+            stage: "content",
+            status: "done",
+            message: "正文已写入缓存",
+            current: index + 1,
+            total,
+            title: article.title,
+          })
+        } catch (error) {
+          failed += 1
+          consecutiveFailures += 1
+          pushEvent({
+            stage: "content",
+            status: "warning",
+            message: `抓取失败：${errorMessage(error)}`,
+            current: index + 1,
+            total,
+            title: article.title,
+          })
+          if (consecutiveFailures >= MAX_CONTENT_FILL_FAILURES) {
+            pushEvent({
+              stage: "error",
+              status: "error",
+              message: `连续失败 ${consecutiveFailures} 次，已停止补齐`,
+              current: index + 1,
+              total,
+              title: null,
+            })
+            toast.wxmpError(errorMessage(error), api.openLogin)
+            return
+          }
+        }
+      }
+
+      const interrupted = contentFillCancelRef.current
+      const summary = `成功 ${succeeded} 篇${failed > 0 ? `，失败 ${failed} 篇` : ""}`
+      const message = interrupted
+        ? `补齐正文已打断，${summary}`
+        : `补齐正文完成，${summary}`
+      pushEvent({
+        stage: interrupted ? "cancel" : "complete",
+        status: interrupted ? "warning" : "done",
+        message,
+        current: succeeded + failed,
+        total,
+        title: null,
+      })
+      if (interrupted) toast.info(message)
+      else toast.success(message)
+    } finally {
+      if (succeeded > 0) setContentSearchVersion((current) => current + 1)
+      setFetchingAid(null)
+      setResuming(false)
+      setCancellingResume(false)
+    }
+  }
+
   const interruptResume = async () => {
     if (!selectedAccount || !resuming || cancellingResume) {
+      return
+    }
+
+    if (resumeMode === "content") {
+      contentFillCancelRef.current = true
+      setCancellingResume(true)
+      setResumeProgressEvents((current) =>
+        appendProgressEvent(current, {
+          fakeid: selectedAccount.fakeid,
+          nickname: selectedAccount.nickname,
+          stage: "cancel",
+          status: "warning",
+          message: "正在打断补齐正文",
+          current: null,
+          total: resumeLimit,
+          title: null,
+        })
+      )
       return
     }
 
@@ -551,6 +721,23 @@ export function ArticleList({
                     <span>检测完备性</span>
                     <span className="text-[11px] text-muted-foreground">
                       选择日期，精确检测当天文章是否缺漏
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    void fillMissingContents()
+                  }}
+                  disabled={!canFillContent}
+                >
+                  <DownloadIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>补齐全部正文</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {missingContentCount > 0
+                        ? `逐篇抓取 ${missingContentCount.toLocaleString()} 篇缺失正文`
+                        : "所有文章正文均已抓取"}
                     </span>
                   </div>
                 </DropdownMenuItem>
@@ -761,7 +948,7 @@ function ResumeProgressDialog({
   cancelling?: boolean
   events: FetchAccountProgress[]
   limit: number
-  mode: FetchMode
+  mode: CollectionTask
   onCancel?: () => void
   onClose: () => void
 }) {
@@ -814,13 +1001,15 @@ function ResumeProgressDialog({
               id="resume-progress-title"
               className="font-heading text-lg leading-tight font-semibold"
             >
-              {modeLabel}文章索引
+              {mode === "content" ? "补齐全部正文" : `${modeLabel}文章索引`}
             </div>
             <div className="mt-1 truncate text-xs text-muted-foreground">
               {account.nickname} ·{" "}
               {mode === "audit"
                 ? formatAuditDateScope(auditDate)
-                : `目标 ${limit.toLocaleString()} 篇`}
+                : mode === "content"
+                  ? `补齐 ${limit.toLocaleString()} 篇正文`
+                  : `目标 ${limit.toLocaleString()} 篇`}
             </div>
           </div>
           <Button
@@ -865,7 +1054,7 @@ function ResumeProgressDialog({
         </div>
 
         <div className="mt-3 grid gap-2 sm:grid-cols-4">
-          {resumeSteps().map((step) => {
+          {resumeSteps(mode).map((step) => {
             const state = processStepState(step.stages, visibleEvents)
             return (
               <div
@@ -1101,7 +1290,7 @@ function ProgressStateIcon({
 function initialResumeProgress(
   account: Pick<Account, "fakeid" | "nickname">,
   limit: number,
-  mode: FetchMode = "forward",
+  mode: CollectionTask = "forward",
   auditDate: string | null = null
 ): FetchAccountProgress {
   const label = RESUME_MODE_LABELS[mode]
@@ -1110,7 +1299,9 @@ function initialResumeProgress(
       ? auditDate
         ? `准备${label}，检测 ${auditDate} 当天`
         : `准备${label}，目标重扫 ${limit.toLocaleString()} 篇索引`
-      : `准备${label}到 ${limit.toLocaleString()} 篇文章索引`
+      : mode === "content"
+        ? `准备补齐 ${limit.toLocaleString()} 篇正文`
+        : `准备${label}到 ${limit.toLocaleString()} 篇文章索引`
   return {
     fakeid: account.fakeid,
     nickname: account.nickname,
@@ -1196,6 +1387,10 @@ function formatAuditDatePhrase(date: string | null) {
   return date ? ` ${date} 当天` : ""
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+}
+
 function isFetchInterruptedMessage(message: string) {
   const normalized = message.toLowerCase()
   return (
@@ -1205,7 +1400,14 @@ function isFetchInterruptedMessage(message: string) {
   )
 }
 
-function resumeSteps() {
+function resumeSteps(mode: CollectionTask) {
+  if (mode === "content") {
+    return [
+      { label: "确认目标", stages: ["prepare"] },
+      { label: "抓取正文", stages: ["content"] },
+      { label: "完成入库", stages: ["complete"] },
+    ]
+  }
   return [
     { label: "确认目标", stages: ["prepare"] },
     { label: "同步账号", stages: ["account"] },
