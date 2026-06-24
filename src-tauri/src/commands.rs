@@ -657,12 +657,30 @@ pub async fn fetch_article_content(
         }
 
         if needs_fallback {
-            let limit = db::article_fetch_limit(&article.aid, &article.fakeid)
+            let account = fallback_fetch_account(&article)?;
+            let mut limit = db::article_fetch_limit(&article.aid, &article.fakeid)
                 .map_err(CmdError::from)?
                 .ok_or_else(|| CmdError {
                     message: "无法计算当前文章的补抓位置".to_string(),
                 })?;
-            run_wcx_fetch_content(&wcx, &article.fakeid, limit)?;
+            run_wcx_fetch_content(&wcx, &account, limit)?;
+
+            let after_first_fallback =
+                db::get_article(&aid)
+                    .map_err(CmdError::from)?
+                    .ok_or_else(|| CmdError {
+                        message: "正文抓取后未找到该文章".to_string(),
+                    })?;
+            if !has_article_body(&after_first_fallback) {
+                if let Some(next_limit) = db::article_fetch_limit(&article.aid, &article.fakeid)
+                    .map_err(CmdError::from)?
+                {
+                    if next_limit > limit {
+                        limit = next_limit;
+                        run_wcx_fetch_content(&wcx, &account, limit)?;
+                    }
+                }
+            }
         }
 
         let updated = db::get_article(&aid)
@@ -852,16 +870,44 @@ fn fetch_single_article_content(wcx: &Path, link: &str) -> Result<ArticleContent
         .map_err(|e| format!("解析 wcx 文章抓取结果失败: {e}"))
 }
 
-fn run_wcx_fetch_content(wcx: &Path, fakeid: &str, limit: u32) -> Result<(), CmdError> {
+fn fallback_fetch_account(article: &ArticleDetail) -> Result<AccountSearchResult, CmdError> {
+    let account = db::get_account(&article.fakeid).map_err(CmdError::from)?;
+    Ok(match account {
+        Some(account) => AccountSearchResult {
+            fakeid: account.fakeid,
+            nickname: account.nickname,
+            alias: account.alias,
+            signature: account.signature,
+            avatar: account.avatar,
+        },
+        None => AccountSearchResult {
+            fakeid: article.fakeid.clone(),
+            nickname: article.fakeid.clone(),
+            alias: None,
+            signature: None,
+            avatar: None,
+        },
+    })
+}
+
+fn run_wcx_fetch_content(
+    wcx: &Path,
+    account: &AccountSearchResult,
+    limit: u32,
+) -> Result<(), CmdError> {
+    let account_json = serde_json::to_string(account).map_err(|e| CmdError {
+        message: format!("序列化公众号选择失败: {e}"),
+    })?;
     let output = Command::new(wcx)
-        .arg("fetch")
-        .arg(fakeid)
-        .arg("--limit")
+        .arg("fetch-selected-account-json")
+        .arg(account_json)
         .arg(limit.to_string())
-        .arg("--content")
+        .arg("1")
+        .arg("--mode")
+        .arg("forward")
         .output()
         .map_err(|e| CmdError {
-            message: format!("运行 wcx fetch 失败: {e}"),
+            message: format!("运行 wcx 精确抓取失败: {e}"),
         })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -870,7 +916,7 @@ fn run_wcx_fetch_content(wcx: &Path, fakeid: &str, limit: u32) -> Result<(), Cmd
     if !output.status.success() {
         let detail = first_nonempty_line(&stderr)
             .or_else(|| first_nonempty_line(&stdout))
-            .unwrap_or_else(|| format!("wcx fetch 退出码: {}", output.status));
+            .unwrap_or_else(|| format!("wcx 精确抓取退出码: {}", output.status));
         return Err(CmdError { message: detail });
     }
 
