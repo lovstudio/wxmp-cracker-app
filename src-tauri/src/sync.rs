@@ -5,8 +5,9 @@
 //! to be invoked from `spawn_blocking` in the Tauri command layer.
 
 use crate::archive::{
-    ensure_repo_configured, load_index, load_settings, publish_date, repo_local_path, repos_root,
-    save_index, save_settings, sha256_hex, title_slug, IndexAccount, IndexArticle, IndexFile,
+    archive_dir, ensure_repo_configured, load_index, load_settings, publish_date, repo_local_path,
+    repos_root, save_index, save_settings, sha256_hex, title_slug, IndexAccount, IndexArticle,
+    IndexFile,
 };
 use crate::db::{self, Account, ArticleDetail};
 use crate::github;
@@ -80,110 +81,11 @@ pub fn sync_articles(app: &AppHandle, opts: SyncOptions) -> Result<SyncSummary> 
 
     let repo_dir = ensure_repo_cloned(&repo_full_name, &settings.branch, &token)?;
     seed_template_if_empty(&repo_dir)?;
-    let mut index = load_index(&repo_dir)?;
 
-    // Collect candidate articles from the local wcx cache.
-    let candidates = db::list_articles_with_content(opts.account_fakeid.as_deref())?;
-    emit(
-        app,
-        SyncProgress::Start {
-            total_candidates: candidates.len(),
-        },
-    );
-
-    // Group by fakeid so we can look up account metadata once each.
-    let mut accounts_seen: HashSet<String> = HashSet::new();
-    let mut pushed = 0usize;
-    let mut skipped = 0usize;
-    let total = candidates.len();
-
-    for (i, article) in candidates.iter().enumerate() {
-        let Some(content_md) = article.content_md.as_deref() else {
-            skipped += 1;
-            continue;
-        };
-
-        let account = db::get_account(&article.fakeid)?
-            .unwrap_or_else(|| fallback_account(&article.fakeid));
-        let nickname = account.nickname.clone();
-        let account_slug = title_slug(&nickname, 40);
-
-        emit(
-            app,
-            SyncProgress::Render {
-                current: i + 1,
-                total,
-                title: article.title.clone(),
-            },
-        );
-
-        let body_hash = sha256_hex(content_md);
-        if !opts.force {
-            if let Some(prev) = index.articles.get(&article.aid) {
-                if prev.content_hash == body_hash {
-                    skipped += 1;
-                    continue;
-                }
-            }
-        }
-
-        let (markdown_path, processed_body) = render_article(
-            &repo_dir,
-            &account_slug,
-            &nickname,
-            article,
-            content_md,
-            settings.sync_images,
-            app,
-        )?;
-
-        // Rehash after image rewrites so future runs match.
-        let final_hash = sha256_hex(&processed_body);
-
-        index.articles.insert(
-            article.aid.clone(),
-            IndexArticle {
-                aid: article.aid.clone(),
-                fakeid: article.fakeid.clone(),
-                nickname: nickname.clone(),
-                title: article.title.clone(),
-                link: article.link.clone(),
-                digest: article.digest.clone(),
-                author: article.author.clone(),
-                create_time: article.create_time,
-                publish_date: publish_date(article.create_time),
-                markdown_path: markdown_path.clone(),
-                content_hash: final_hash,
-            },
-        );
-        accounts_seen.insert(article.fakeid.clone());
-        pushed += 1;
-    }
-
-    // Refresh account summaries for everything we touched.
-    let now_iso = Utc::now().to_rfc3339();
-    for fakeid in &accounts_seen {
-        if let Some(acc) = db::get_account(fakeid)? {
-            // Write account profile file.
-            let account_slug = title_slug(&acc.nickname, 40);
-            write_account_profile(&repo_dir, &account_slug, &acc)?;
-            index.accounts.insert(
-                fakeid.clone(),
-                IndexAccount {
-                    fakeid: acc.fakeid,
-                    nickname: acc.nickname,
-                    alias: acc.alias,
-                    signature: acc.signature,
-                    avatar: acc.avatar,
-                    article_count: acc.article_count,
-                    last_synced_at: now_iso.clone(),
-                },
-            );
-        }
-    }
-
-    save_index(&repo_dir, &index)?;
-    ensure_readme(&repo_dir, &index)?;
+    let outcome = render_into_dir(&repo_dir, &opts, settings.sync_images, app)?;
+    let pushed = outcome.rendered;
+    let skipped = outcome.skipped;
+    let accounts_seen = outcome.accounts_seen;
 
     if pushed == 0 {
         emit(
@@ -233,6 +135,167 @@ pub fn sync_articles(app: &AppHandle, opts: SyncOptions) -> Result<SyncSummary> 
         skipped,
         repo_html_url: Some(format!("https://github.com/{}", repo_full_name)),
         commit_message: Some(commit_msg),
+    })
+}
+
+// --- local archive --------------------------------------------------------
+
+#[derive(Serialize, Clone, Debug)]
+pub struct LocalArchiveSummary {
+    pub rendered: usize,
+    pub skipped: usize,
+    pub accounts: usize,
+    pub archive_dir: String,
+}
+
+/// Render every cached article (with content) to the local-only markdown
+/// archive. No GitHub binding, token, or network required — this is the
+/// baseline on-disk mirror that GitHub sync optionally pushes on top of.
+pub fn archive_local(app: &AppHandle, opts: SyncOptions) -> Result<LocalArchiveSummary> {
+    let settings = load_settings()?;
+    let dir = archive_dir()?;
+    fs::create_dir_all(&dir).with_context(|| format!("mkdir {:?}", dir))?;
+
+    let outcome = render_into_dir(&dir, &opts, settings.sync_images, app)?;
+
+    emit(
+        app,
+        SyncProgress::Done {
+            pushed: outcome.rendered,
+            skipped: outcome.skipped,
+            message: format!("已导出 {} 篇文章到本地归档。", outcome.rendered),
+        },
+    );
+
+    Ok(LocalArchiveSummary {
+        rendered: outcome.rendered,
+        skipped: outcome.skipped,
+        accounts: outcome.accounts_seen.len(),
+        archive_dir: dir.display().to_string(),
+    })
+}
+
+struct RenderOutcome {
+    rendered: usize,
+    skipped: usize,
+    accounts_seen: HashSet<String>,
+}
+
+/// Render cached articles into `target_dir`, refreshing its index, per-account
+/// profiles and README. Pure filesystem work — shared by GitHub sync and the
+/// local archive so both produce an identical `accounts/<slug>/articles` tree.
+fn render_into_dir(
+    target_dir: &Path,
+    opts: &SyncOptions,
+    sync_images: bool,
+    app: &AppHandle,
+) -> Result<RenderOutcome> {
+    let mut index = load_index(target_dir)?;
+
+    let candidates = db::list_articles_with_content(opts.account_fakeid.as_deref())?;
+    emit(
+        app,
+        SyncProgress::Start {
+            total_candidates: candidates.len(),
+        },
+    );
+
+    let mut accounts_seen: HashSet<String> = HashSet::new();
+    let mut rendered = 0usize;
+    let mut skipped = 0usize;
+    let total = candidates.len();
+
+    for (i, article) in candidates.iter().enumerate() {
+        let Some(content_md) = article.content_md.as_deref() else {
+            skipped += 1;
+            continue;
+        };
+
+        let account = db::get_account(&article.fakeid)?
+            .unwrap_or_else(|| fallback_account(&article.fakeid));
+        let nickname = account.nickname.clone();
+        let account_slug = title_slug(&nickname, 40);
+
+        emit(
+            app,
+            SyncProgress::Render {
+                current: i + 1,
+                total,
+                title: article.title.clone(),
+            },
+        );
+
+        let body_hash = sha256_hex(content_md);
+        if !opts.force {
+            if let Some(prev) = index.articles.get(&article.aid) {
+                if prev.content_hash == body_hash {
+                    skipped += 1;
+                    continue;
+                }
+            }
+        }
+
+        let (markdown_path, processed_body) = render_article(
+            target_dir,
+            &account_slug,
+            &nickname,
+            article,
+            content_md,
+            sync_images,
+            app,
+        )?;
+
+        // Rehash after image rewrites so future runs match.
+        let final_hash = sha256_hex(&processed_body);
+
+        index.articles.insert(
+            article.aid.clone(),
+            IndexArticle {
+                aid: article.aid.clone(),
+                fakeid: article.fakeid.clone(),
+                nickname: nickname.clone(),
+                title: article.title.clone(),
+                link: article.link.clone(),
+                digest: article.digest.clone(),
+                author: article.author.clone(),
+                create_time: article.create_time,
+                publish_date: publish_date(article.create_time),
+                markdown_path: markdown_path.clone(),
+                content_hash: final_hash,
+            },
+        );
+        accounts_seen.insert(article.fakeid.clone());
+        rendered += 1;
+    }
+
+    // Refresh account summaries for everything we touched.
+    let now_iso = Utc::now().to_rfc3339();
+    for fakeid in &accounts_seen {
+        if let Some(acc) = db::get_account(fakeid)? {
+            let account_slug = title_slug(&acc.nickname, 40);
+            write_account_profile(target_dir, &account_slug, &acc)?;
+            index.accounts.insert(
+                fakeid.clone(),
+                IndexAccount {
+                    fakeid: acc.fakeid,
+                    nickname: acc.nickname,
+                    alias: acc.alias,
+                    signature: acc.signature,
+                    avatar: acc.avatar,
+                    article_count: acc.article_count,
+                    last_synced_at: now_iso.clone(),
+                },
+            );
+        }
+    }
+
+    save_index(target_dir, &index)?;
+    ensure_readme(target_dir, &index)?;
+
+    Ok(RenderOutcome {
+        rendered,
+        skipped,
+        accounts_seen,
     })
 }
 

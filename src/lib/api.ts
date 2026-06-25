@@ -158,6 +158,8 @@ export const api = {
     invoke<GhSyncSettings>("github_sync_settings_set", { settings }),
   githubSyncArticles: (options: GhSyncOptions) =>
     invoke<GhSyncSummary>("github_sync_articles", { options }),
+  archiveArticlesLocal: (options: GhSyncOptions = {}) =>
+    invoke<LocalArchiveSummary>("archive_articles_local", { options }),
 }
 
 export const onLoginSuccess = (cb: () => void) => listen("login://success", cb)
@@ -219,6 +221,13 @@ export interface GhSyncSummary {
   skipped: number
   repo_html_url: string | null
   commit_message: string | null
+}
+
+export interface LocalArchiveSummary {
+  rendered: number
+  skipped: number
+  accounts: number
+  archive_dir: string
 }
 
 export type GhSyncProgress =

@@ -302,6 +302,24 @@ export function ArticleList({
     }
   }
 
+  const [exportingArchive, setExportingArchive] = useState(false)
+  const exportLocalArchive = async () => {
+    if (exportingArchive) return
+    setExportingArchive(true)
+    toast.info("正在导出本地 Markdown 归档…")
+    try {
+      const summary = await api.archiveArticlesLocal()
+      toast.success(
+        `已导出 ${summary.rendered} 篇文章（${summary.accounts} 个公众号）到本地归档`
+      )
+      await api.revealArchiveFolder()
+    } catch (error) {
+      toast.error(`导出本地归档失败：${errorMessage(error)}`)
+    } finally {
+      setExportingArchive(false)
+    }
+  }
+
   const fetchArticleContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
 
@@ -721,6 +739,21 @@ export function ArticleList({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    void exportLocalArchive()
+                  }}
+                  disabled={exportingArchive}
+                >
+                  <DownloadIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>导出本地归档（Markdown）</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      将各公众号正文导出为本地 md，按公众号分目录
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   onSelect={() => {
                     void revealArchiveFolder()
                   }}
@@ -729,7 +762,7 @@ export function ArticleList({
                   <div className="flex flex-col">
                     <span>Reveal 归档文件夹</span>
                     <span className="text-[11px] text-muted-foreground">
-                      打开当前文章 Markdown、归档仓库或本地数据目录
+                      打开本地归档、归档仓库或数据目录
                     </span>
                   </div>
                 </DropdownMenuItem>
