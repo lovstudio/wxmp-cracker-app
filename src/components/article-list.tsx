@@ -45,7 +45,7 @@ import {
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
-import { openPath, openUrl } from "@tauri-apps/plugin-opener"
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener"
 
 interface Props {
   account?: Account | null
@@ -281,8 +281,7 @@ export function ArticleList({
   const revealStorageFolder = async () => {
     try {
       const cachePath = await api.cacheDbPath()
-      const folderPath = parentPath(cachePath)
-      await openPath(folderPath)
+      await revealItemInDir(cachePath)
     } catch (error) {
       toast.error(`Reveal 存储文件夹失败：${errorMessage(error)}`)
     }
@@ -1592,15 +1591,6 @@ function highlightText(text: string, query: string): ReactNode {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function parentPath(path: string): string {
-  const normalized = path.replace(/[/\\]+$/, "")
-  const separatorIndex = Math.max(
-    normalized.lastIndexOf("/"),
-    normalized.lastIndexOf("\\")
-  )
-  return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized
 }
 
 function ArticleContextMenu({
