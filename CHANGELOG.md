@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 - 2026-06-25
+
+### Fixed
+
+- Fixed text-only WeChat article pages whose body is stored in `content_noencode` instead of the usual `js_content` container.
+- Fixed single-article body fallback so it no longer tries to resolve a known `fakeid` through WeChat account search.
+- Fixed reader rendering for escaped inline WeChat article links.
+- Treat empty article bodies as missing content so they can be retried instead of cached as successful blank fetches.
+
 ## 0.2.0 - 2026-06-13
 
 ### Added
