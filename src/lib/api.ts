@@ -118,6 +118,10 @@ export const api = {
     invoke<ArticleLocalFile | null>("article_local_file", { aid }),
   openArticleLocalFile: (aid: string) =>
     invoke<string>("open_article_local_file", { aid }),
+  revealArticleLocalFile: (aid: string) =>
+    invoke<string>("reveal_article_local_file", { aid }),
+  exportArticleLocal: (aid: string) =>
+    invoke<string>("export_article_local", { aid }),
   resolveWechatImage: (url: string) =>
     invoke<ResolvedWechatImage>("resolve_wechat_image", { url }),
   searchAccounts: (query: string) =>

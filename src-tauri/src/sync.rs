@@ -175,6 +175,87 @@ pub fn archive_local(app: &AppHandle, opts: SyncOptions) -> Result<LocalArchiveS
     })
 }
 
+/// Render a single cached article into the local archive on demand, returning
+/// the absolute path to its markdown file. Reuses the existing render if the
+/// source is unchanged so opening an article doesn't re-download its images.
+pub fn archive_one(app: &AppHandle, aid: &str, force: bool) -> Result<PathBuf> {
+    let settings = load_settings()?;
+    let dir = archive_dir()?;
+    fs::create_dir_all(&dir).with_context(|| format!("mkdir {:?}", dir))?;
+    let mut index = load_index(&dir)?;
+
+    let article = db::get_article(aid)?.ok_or_else(|| anyhow!("文章不存在或已被删除"))?;
+    let content_md = article
+        .content_md
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("该文章尚未抓取正文，请先抓取正文后再导出本地 Markdown"))?;
+
+    let account =
+        db::get_account(&article.fakeid)?.unwrap_or_else(|| fallback_account(&article.fakeid));
+    let nickname = account.nickname.clone();
+    let account_slug = title_slug(&nickname, 40);
+    let source_hash = content_source_hash(content_md);
+
+    // Already current on disk → just return it.
+    if !force {
+        if let Some(prev) = index.articles.get(aid) {
+            if prev.content_hash == source_hash {
+                let existing = dir.join(&prev.markdown_path);
+                if existing.exists() {
+                    return Ok(existing);
+                }
+            }
+        }
+    }
+
+    let (markdown_path, _) = render_article(
+        &dir,
+        &account_slug,
+        &nickname,
+        &article,
+        content_md,
+        settings.sync_images,
+        app,
+    )?;
+
+    index.articles.insert(
+        aid.to_string(),
+        IndexArticle {
+            aid: article.aid.clone(),
+            fakeid: article.fakeid.clone(),
+            nickname: nickname.clone(),
+            title: article.title.clone(),
+            link: article.link.clone(),
+            digest: article.digest.clone(),
+            author: article.author.clone(),
+            create_time: article.create_time,
+            publish_date: publish_date(article.create_time),
+            markdown_path: markdown_path.clone(),
+            content_hash: source_hash,
+        },
+    );
+    write_account_profile(&dir, &account_slug, &account)?;
+    index.accounts.insert(
+        article.fakeid.clone(),
+        IndexAccount {
+            fakeid: account.fakeid.clone(),
+            nickname: account.nickname.clone(),
+            alias: account.alias.clone(),
+            signature: account.signature.clone(),
+            avatar: account.avatar.clone(),
+            article_count: account.article_count,
+            last_synced_at: Utc::now().to_rfc3339(),
+        },
+    );
+
+    save_index(&dir, &index)?;
+    ensure_readme(&dir, &index)?;
+
+    Ok(dir.join(&markdown_path))
+}
+
 struct RenderOutcome {
     rendered: usize,
     skipped: usize,

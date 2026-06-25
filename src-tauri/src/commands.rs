@@ -252,32 +252,46 @@ pub fn article_local_file(aid: String) -> Result<Option<ArticleLocalFile>, CmdEr
         .map_err(Into::into)
 }
 
-#[tauri::command]
-pub fn open_article_local_file(aid: String) -> Result<String, CmdError> {
+/// Render this one article to the local archive on demand (no whole-account
+/// export needed) and return its absolute md path.
+async fn ensure_article_local_file(app: AppHandle, aid: String) -> Result<PathBuf, CmdError> {
     let aid = aid.trim().to_string();
     if aid.is_empty() {
         return Err(CmdError {
             message: "缺少文章 ID".to_string(),
         });
     }
+    tauri::async_runtime::spawn_blocking(move || sync::archive_one(&app, &aid, false))
+        .await
+        .map_err(|e| CmdError {
+            message: format!("导出文章任务失败: {e}"),
+        })?
+        .map_err(Into::into)
+}
 
-    // Resolve + open from Rust so the opener bypasses the webview's path scope
-    // (the archive lives outside the app-specific data dir).
-    let Some(path) = archive::article_local_file_path(&aid).map_err(CmdError::from)? else {
-        return Err(CmdError {
-            message: "本地文章文件尚未生成，请先导出本地归档".to_string(),
-        });
-    };
-    if !path.exists() {
-        return Err(CmdError {
-            message: "本地文章文件不存在，请重新导出本地归档".to_string(),
-        });
-    }
+#[tauri::command]
+pub async fn export_article_local(app: AppHandle, aid: String) -> Result<String, CmdError> {
+    let path = ensure_article_local_file(app, aid).await?;
+    Ok(path.display().to_string())
+}
 
+// Open/reveal from Rust so the opener bypasses the webview's path scope (the
+// archive lives outside the app-specific data dir).
+#[tauri::command]
+pub async fn open_article_local_file(app: AppHandle, aid: String) -> Result<String, CmdError> {
+    let path = ensure_article_local_file(app, aid).await?;
     tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|error| CmdError {
         message: format!("打开本地文件失败: {error}"),
     })?;
+    Ok(path.display().to_string())
+}
 
+#[tauri::command]
+pub async fn reveal_article_local_file(app: AppHandle, aid: String) -> Result<String, CmdError> {
+    let path = ensure_article_local_file(app, aid).await?;
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|error| CmdError {
+        message: format!("Reveal 本地文件失败: {error}"),
+    })?;
     Ok(path.display().to_string())
 }
 
