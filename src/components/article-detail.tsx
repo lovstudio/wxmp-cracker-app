@@ -616,6 +616,8 @@ function prepareWechatContentHtml(html: string): string {
   try {
     const doc = new DOMParser().parseFromString(html, "text/html")
 
+    restoreEscapedWechatLinks(doc)
+
     doc.querySelectorAll("img").forEach((img) => {
       const src = pickWechatImageSrc(img)
       if (src) {
@@ -633,6 +635,94 @@ function prepareWechatContentHtml(html: string): string {
   } catch {
     return html
   }
+}
+
+function restoreEscapedWechatLinks(doc: Document) {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    const text = node.nodeValue ?? ""
+    if (text.includes("<a") && text.includes("</a>")) {
+      textNodes.push(node)
+    }
+  }
+
+  textNodes.forEach((node) => replaceEscapedAnchorText(node, doc))
+}
+
+function replaceEscapedAnchorText(node: Text, doc: Document) {
+  const text = node.nodeValue ?? ""
+  const anchorPattern = /<a\b[^>]*>[\s\S]*?<\/a>/gi
+  const fragment = doc.createDocumentFragment()
+  let lastIndex = 0
+  let changed = false
+
+  for (const match of text.matchAll(anchorPattern)) {
+    const matchedText = match[0]
+    const index = match.index ?? 0
+    if (index > lastIndex) {
+      fragment.append(doc.createTextNode(text.slice(lastIndex, index)))
+    }
+
+    const anchor = createSafeArticleAnchor(doc, matchedText)
+    if (anchor) {
+      fragment.append(anchor)
+      changed = true
+    } else {
+      fragment.append(doc.createTextNode(matchedText))
+    }
+
+    lastIndex = index + matchedText.length
+  }
+
+  if (!changed) return
+
+  if (lastIndex < text.length) {
+    fragment.append(doc.createTextNode(text.slice(lastIndex)))
+  }
+  node.parentNode?.replaceChild(fragment, node)
+}
+
+function createSafeArticleAnchor(
+  doc: Document,
+  anchorHtml: string
+): HTMLAnchorElement | null {
+  const template = doc.createElement("template")
+  template.innerHTML = anchorHtml
+  const parsed = template.content.querySelector("a")
+  const href = safeArticleHref(parsed?.getAttribute("href") ?? "")
+  if (!parsed || !href) return null
+
+  const anchor = doc.createElement("a")
+  anchor.href = href
+  anchor.textContent = parsed.textContent?.trim() || href
+  anchor.target = "_blank"
+  anchor.rel = "noopener noreferrer"
+
+  const className = parsed.getAttribute("class")
+  if (className) {
+    anchor.className = className
+  }
+
+  return anchor
+}
+
+function safeArticleHref(value: string): string | null {
+  const href = value.trim()
+  if (!href) return null
+
+  try {
+    const url = new URL(href)
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.toString()
+    }
+  } catch {
+    return null
+  }
+
+  return null
 }
 
 function pickWechatImageSrc(img: Element): string | null {
