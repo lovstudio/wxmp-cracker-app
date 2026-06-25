@@ -1364,16 +1364,21 @@ pub fn reveal_archive_folder(aid: Option<String>) -> Result<String, CmdError> {
         }
     }
 
-    // Prefer the synced archive repo dir; otherwise fall back to the local data
-    // root (cache.db lives there) so the action always opens something useful
+    // Reveal priority: local md archive (the browsable per-account mirror) →
+    // synced GitHub repo dir → local data root. This keeps the action useful
     // even before a GitHub archive repo is bound.
     let settings = archive::load_settings().map_err(CmdError::from)?;
-    let target = settings
-        .repo_full_name
-        .as_deref()
-        .and_then(|repo_full_name| archive::repo_local_path(repo_full_name).ok())
-        .filter(|repo_dir| repo_dir.exists())
-        .map_or_else(|| archive::data_root().map_err(CmdError::from), Ok)?;
+    let local_archive = archive::archive_dir().map_err(CmdError::from)?;
+    let target = if local_archive.exists() {
+        local_archive
+    } else {
+        settings
+            .repo_full_name
+            .as_deref()
+            .and_then(|repo_full_name| archive::repo_local_path(repo_full_name).ok())
+            .filter(|repo_dir| repo_dir.exists())
+            .map_or_else(|| archive::data_root().map_err(CmdError::from), Ok)?
+    };
 
     tauri_plugin_opener::open_path(&target, None::<&str>).map_err(|error| CmdError {
         message: format!("打开归档文件夹失败: {error}"),
@@ -1399,6 +1404,19 @@ pub async fn github_sync_articles(
         .await
         .map_err(|e| CmdError {
             message: format!("同步任务失败: {e}"),
+        })?
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn archive_articles_local(
+    app: AppHandle,
+    options: sync::SyncOptions,
+) -> Result<sync::LocalArchiveSummary, CmdError> {
+    tauri::async_runtime::spawn_blocking(move || sync::archive_local(&app, options))
+        .await
+        .map_err(|e| CmdError {
+            message: format!("本地归档任务失败: {e}"),
         })?
         .map_err(Into::into)
 }

@@ -84,6 +84,13 @@ pub fn repos_root() -> Result<PathBuf> {
     Ok(data_root()?.join("repos"))
 }
 
+/// Local-only markdown archive root. Holds the same `accounts/<slug>/articles`
+/// layout as a GitHub archive repo, but exists independently of any GitHub
+/// binding so fetched articles always have a browsable on-disk md mirror.
+pub fn archive_dir() -> Result<PathBuf> {
+    Ok(data_root()?.join("archive"))
+}
+
 pub fn repo_local_path(full_name: &str) -> Result<PathBuf> {
     let safe = full_name.replace('/', "__");
     Ok(repos_root()?.join(safe))

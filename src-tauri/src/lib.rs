@@ -117,6 +117,7 @@ pub fn run() {
             commands::reveal_archive_folder,
             commands::github_sync_settings_set,
             commands::github_sync_articles,
+            commands::archive_articles_local,
         ])
         .setup(|app| {
             setup_tray(app)?;
