@@ -114,6 +114,7 @@ pub fn run() {
             commands::github_list_repos,
             commands::github_create_repo,
             commands::github_sync_settings_get,
+            commands::reveal_archive_folder,
             commands::github_sync_settings_set,
             commands::github_sync_articles,
         ])
