@@ -729,7 +729,7 @@ export function ArticleList({
                   <div className="flex flex-col">
                     <span>Reveal 归档文件夹</span>
                     <span className="text-[11px] text-muted-foreground">
-                      打开当前文章 Markdown 或归档仓库目录
+                      打开当前文章 Markdown、归档仓库或本地数据目录
                     </span>
                   </div>
                 </DropdownMenuItem>

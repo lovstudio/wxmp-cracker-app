@@ -47,9 +47,16 @@ impl Default for SyncSettings {
     }
 }
 
-pub fn settings_path() -> Result<PathBuf> {
+/// Local data root for all wcx state (cache.db, settings, cloned archive repos).
+/// Always present once the app has run; used as a graceful reveal fallback when
+/// no GitHub archive repo is bound yet.
+pub fn data_root() -> Result<PathBuf> {
     let base = dirs::data_dir().context("no data dir")?;
-    Ok(base.join("wcx").join(SETTINGS_FILE))
+    Ok(base.join("wcx"))
+}
+
+pub fn settings_path() -> Result<PathBuf> {
+    Ok(data_root()?.join(SETTINGS_FILE))
 }
 
 pub fn load_settings() -> Result<SyncSettings> {
@@ -74,8 +81,7 @@ pub fn save_settings(settings: &SyncSettings) -> Result<()> {
 }
 
 pub fn repos_root() -> Result<PathBuf> {
-    let base = dirs::data_dir().context("no data dir")?;
-    Ok(base.join("wcx").join("repos"))
+    Ok(data_root()?.join("repos"))
 }
 
 pub fn repo_local_path(full_name: &str) -> Result<PathBuf> {
