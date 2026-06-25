@@ -1,4 +1,5 @@
-use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, USER_AGENT};
+use base64::Engine as _;
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -34,6 +35,12 @@ pub struct FetchAccountResult {
 pub struct ArticleLocalFile {
     pub path: String,
     pub exists: bool,
+}
+
+#[derive(Serialize)]
+pub struct ResolvedWechatImage {
+    pub data_url: String,
+    pub content_type: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -77,6 +84,8 @@ const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
 const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(12);
+const WECHAT_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
+const WECHAT_IMAGE_MAX_BYTES: u64 = 12 * 1024 * 1024;
 
 #[derive(Clone)]
 struct ActiveFetchProcess {
@@ -132,6 +141,7 @@ static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
     OnceLock::new();
 static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
 impl Drop for ActiveFetchGuard {
     fn drop(&mut self) {
@@ -240,6 +250,22 @@ pub fn article_local_file(aid: String) -> Result<Option<ArticleLocalFile>, CmdEr
             })
         })
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn resolve_wechat_image(url: String) -> Result<ResolvedWechatImage, CmdError> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(CmdError {
+            message: "缺少图片 URL".to_string(),
+        });
+    }
+
+    tauri::async_runtime::spawn_blocking(move || resolve_wechat_image_blocking(&url))
+        .await
+        .map_err(|e| CmdError {
+            message: format!("微信图片解析任务失败: {e}"),
+        })?
 }
 
 fn normalize_optional_account_id(account_id: Option<String>) -> Option<String> {
@@ -414,6 +440,151 @@ fn build_wechat_search_client() -> Result<reqwest::blocking::Client, String> {
         .timeout(WECHAT_DIRECT_SEARCH_TIMEOUT)
         .build()
         .map_err(|error| format!("初始化微信搜索客户端失败: {error}"))
+}
+
+fn wechat_image_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
+    WECHAT_IMAGE_CLIENT
+        .get_or_init(build_wechat_image_client)
+        .as_ref()
+        .map_err(|message| CmdError {
+            message: message.clone(),
+        })
+}
+
+fn build_wechat_image_client() -> Result<reqwest::blocking::Client, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(WECHAT_USER_AGENT));
+    headers.insert(REFERER, HeaderValue::from_static(WECHAT_REFERER_URL));
+
+    reqwest::blocking::Client::builder()
+        .default_headers(headers)
+        .timeout(WECHAT_IMAGE_TIMEOUT)
+        .build()
+        .map_err(|error| format!("初始化微信图片客户端失败: {error}"))
+}
+
+fn resolve_wechat_image_blocking(url: &str) -> Result<ResolvedWechatImage, CmdError> {
+    let url = normalize_wechat_image_url(url)?;
+    if !is_allowed_wechat_image_url(&url) {
+        return Err(CmdError {
+            message: "只允许解析微信公众平台图片 URL".to_string(),
+        });
+    }
+
+    let response = wechat_image_client()?
+        .get(url.clone())
+        .send()
+        .map_err(|error| CmdError {
+            message: format!("微信图片请求失败: {error}"),
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(CmdError {
+            message: format!("微信图片 HTTP {status}"),
+        });
+    }
+
+    if response
+        .content_length()
+        .is_some_and(|length| length > WECHAT_IMAGE_MAX_BYTES)
+    {
+        return Err(CmdError {
+            message: "微信图片过大，已拒绝解析".to_string(),
+        });
+    }
+
+    let content_type = image_content_type(
+        &url,
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    )
+    .ok_or_else(|| CmdError {
+        message: "微信图片响应不是图片内容".to_string(),
+    })?;
+
+    let mut bytes = Vec::new();
+    let mut limited_response = response.take(WECHAT_IMAGE_MAX_BYTES + 1);
+    limited_response
+        .read_to_end(&mut bytes)
+        .map_err(|error| CmdError {
+            message: format!("读取微信图片失败: {error}"),
+        })?;
+
+    if bytes.len() as u64 > WECHAT_IMAGE_MAX_BYTES {
+        return Err(CmdError {
+            message: "微信图片过大，已拒绝解析".to_string(),
+        });
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(ResolvedWechatImage {
+        data_url: format!("data:{content_type};base64,{encoded}"),
+        content_type,
+    })
+}
+
+fn normalize_wechat_image_url(value: &str) -> Result<reqwest::Url, CmdError> {
+    let trimmed = value.trim().replace("&amp;", "&");
+    let absolute = if let Some(rest) = trimmed.strip_prefix("//") {
+        format!("https:{rest}")
+    } else {
+        trimmed
+    };
+    let mut url = reqwest::Url::parse(&absolute).map_err(|error| CmdError {
+        message: format!("图片 URL 无效: {error}"),
+    })?;
+
+    if url.scheme() == "http" {
+        let _ = url.set_scheme("https");
+    }
+
+    Ok(url)
+}
+
+fn is_allowed_wechat_image_url(url: &reqwest::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url
+            .host_str()
+            .is_some_and(|host| is_wechat_image_host(&host.to_ascii_lowercase()))
+}
+
+fn is_wechat_image_host(host: &str) -> bool {
+    host == "mmbiz.qpic.cn"
+        || host.ends_with(".mmbiz.qpic.cn")
+        || host == "mmbiz.qlogo.cn"
+        || host.ends_with(".mmbiz.qlogo.cn")
+        || host == "wx.qlogo.cn"
+        || host.ends_with(".wx.qlogo.cn")
+        || host == "thirdwx.qlogo.cn"
+        || host.ends_with(".thirdwx.qlogo.cn")
+}
+
+fn image_content_type(url: &reqwest::Url, header: Option<&str>) -> Option<String> {
+    let content_type = header
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| value.starts_with("image/"));
+
+    content_type.or_else(|| image_content_type_hint(url.as_str()).map(str::to_string))
+}
+
+fn image_content_type_hint(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("wx_fmt=jpeg") || lower.contains("wx_fmt=jpg") {
+        Some("image/jpeg")
+    } else if lower.contains("wx_fmt=png") {
+        Some("image/png")
+    } else if lower.contains("wx_fmt=gif") {
+        Some("image/gif")
+    } else if lower.contains("wx_fmt=webp") {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 fn is_terminal_wechat_search_error(message: &str) -> bool {

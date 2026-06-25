@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowLeftIcon,
   BookOpenTextIcon,
@@ -33,7 +33,7 @@ import {
   type ArticleLocalFile,
 } from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
-import { normalizeWechatImageUrl } from "@/lib/media"
+import { isWechatRemoteImageUrl, normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
 
 interface Props {
@@ -47,6 +47,8 @@ interface ArticleDetailMenuState {
   x: number
   y: number
 }
+
+const resolvedWechatImageCache = new Map<string, Promise<string>>()
 
 export function ArticleDetail({
   aid,
@@ -553,14 +555,29 @@ function ArticleBody({
   fetchingContent: boolean
   onFetchContent: () => void
 }) {
+  const articleRef = useRef<HTMLElement | null>(null)
   const preparedHtml = useMemo(() => {
     if (!detail.content_html) return null
     return prepareWechatContentHtml(detail.content_html)
   }, [detail.content_html])
 
+  useEffect(() => {
+    if (!preparedHtml) return
+    const article = articleRef.current
+    if (!article) return
+
+    let cancelled = false
+    void resolveWechatArticleImages(article, () => cancelled)
+
+    return () => {
+      cancelled = true
+    }
+  }, [preparedHtml])
+
   if (preparedHtml) {
     return (
       <article
+        ref={articleRef}
         className="article-body"
         dangerouslySetInnerHTML={{ __html: preparedHtml }}
       />
@@ -621,7 +638,12 @@ function prepareWechatContentHtml(html: string): string {
     doc.querySelectorAll("img").forEach((img) => {
       const src = pickWechatImageSrc(img)
       if (src) {
-        img.setAttribute("src", src)
+        if (isWechatRemoteImageUrl(src)) {
+          img.setAttribute("data-wxmp-image-src", src)
+          img.removeAttribute("src")
+        } else {
+          img.setAttribute("src", src)
+        }
       }
       img.setAttribute("referrerpolicy", "no-referrer")
       img.setAttribute("loading", "lazy")
@@ -743,4 +765,50 @@ function pickWechatImageSrc(img: Element): string | null {
   }
 
   return normalizeWechatImageUrl(img.getAttribute("src"))
+}
+
+async function resolveWechatArticleImages(
+  article: HTMLElement,
+  isCancelled: () => boolean
+) {
+  const images = Array.from(
+    article.querySelectorAll<HTMLImageElement>("img[data-wxmp-image-src]")
+  )
+
+  await Promise.all(
+    images.map(async (img) => {
+      const src = img.getAttribute("data-wxmp-image-src")
+      if (!src) return
+
+      try {
+        const dataUrl = await resolveWechatImageDataUrl(src)
+        if (isCancelled() || !article.contains(img)) return
+
+        img.src = dataUrl
+        img.removeAttribute("data-wxmp-image-error")
+      } catch (error) {
+        if (isCancelled() || !article.contains(img)) return
+
+        console.warn("resolve WeChat image failed", error)
+        img.src = src
+        img.setAttribute("data-wxmp-image-error", "true")
+      }
+    })
+  )
+}
+
+function resolveWechatImageDataUrl(src: string) {
+  const cached = resolvedWechatImageCache.get(src)
+  if (cached) return cached
+
+  const request = api
+    .resolveWechatImage(src)
+    .then((image) => image.data_url)
+    .catch((error) => {
+      resolvedWechatImageCache.delete(src)
+      throw error
+    })
+
+  resolvedWechatImageCache.set(src, request)
+  return request
 }

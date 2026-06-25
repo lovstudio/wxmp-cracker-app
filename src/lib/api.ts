@@ -36,6 +36,11 @@ export interface ArticleLocalFile {
   exists: boolean
 }
 
+export interface ResolvedWechatImage {
+  data_url: string
+  content_type: string
+}
+
 export interface LoginAccount {
   nickname: string | null
   username: string | null
@@ -111,6 +116,8 @@ export const api = {
   cacheDbPath: () => invoke<string>("cache_db_path"),
   articleLocalFile: (aid: string) =>
     invoke<ArticleLocalFile | null>("article_local_file", { aid }),
+  resolveWechatImage: (url: string) =>
+    invoke<ResolvedWechatImage>("resolve_wechat_image", { url }),
   searchAccounts: (query: string) =>
     invoke<AccountSearchResult[]>("search_accounts", { query }),
   fetchAccount: (query: string, limit: number, withContent: boolean) =>
