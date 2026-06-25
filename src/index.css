@@ -1190,7 +1190,7 @@ input {
   @apply select-text;
   box-sizing: border-box;
   max-width: 100%;
-  padding: 40px clamp(28px, 3.6vw, 52px) 56px;
+  padding: 16px clamp(10px, 1.4vw, 20px) 24px;
   font-family: var(--ui-font-sans);
   font-size: 16px;
   line-height: 1.9;
@@ -1357,7 +1357,7 @@ input {
   }
 
   .article-body {
-    padding: 30px clamp(20px, 5vw, 34px) 46px;
+    padding: 14px clamp(8px, 2vw, 16px) 20px;
     font-size: 15.5px;
     line-height: 1.82;
   }
