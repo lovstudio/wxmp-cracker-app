@@ -49,6 +49,10 @@ interface ArticleDetailMenuState {
 }
 
 const resolvedWechatImageCache = new Map<string, Promise<string>>()
+const TRANSPARENT_IMAGE_DATA_URL =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+const CSS_URL_PATTERN = /url\(\s*(['"]?)(.*?)\1\s*\)/gi
+const createCssUrlPattern = () => new RegExp(CSS_URL_PATTERN)
 
 export function ArticleDetail({
   aid,
@@ -653,6 +657,10 @@ function prepareWechatContentHtml(html: string): string {
       }
     })
 
+    doc.querySelectorAll("[style]").forEach((element) => {
+      markWechatStyleImages(element)
+    })
+
     return doc.body.innerHTML
   } catch {
     return html
@@ -771,10 +779,19 @@ async function resolveWechatArticleImages(
   article: HTMLElement,
   isCancelled: () => boolean
 ) {
+  await Promise.all([
+    resolveWechatImgElements(article, isCancelled),
+    resolveWechatStyleImages(article, isCancelled),
+  ])
+}
+
+async function resolveWechatImgElements(
+  article: HTMLElement,
+  isCancelled: () => boolean
+) {
   const images = Array.from(
     article.querySelectorAll<HTMLImageElement>("img[data-wxmp-image-src]")
   )
-
   await Promise.all(
     images.map(async (img) => {
       const src = img.getAttribute("data-wxmp-image-src")
@@ -790,8 +807,48 @@ async function resolveWechatArticleImages(
         if (isCancelled() || !article.contains(img)) return
 
         console.warn("resolve WeChat image failed", error)
-        img.src = src
         img.setAttribute("data-wxmp-image-error", "true")
+      }
+    })
+  )
+}
+
+async function resolveWechatStyleImages(
+  article: HTMLElement,
+  isCancelled: () => boolean
+) {
+  const elements = Array.from(
+    article.querySelectorAll<HTMLElement>("[data-wxmp-style-image-srcs]")
+  )
+
+  await Promise.all(
+    elements.map(async (element) => {
+      const template = element.getAttribute("data-wxmp-style-template")
+      const srcs = parseStyleImageSrcs(
+        element.getAttribute("data-wxmp-style-image-srcs")
+      )
+      if (!template || srcs.length === 0) return
+
+      try {
+        const resolved = new Map<string, string>()
+        await Promise.all(
+          srcs.map(async (src) => {
+            resolved.set(src, await resolveWechatImageDataUrl(src))
+          })
+        )
+
+        if (isCancelled() || !article.contains(element)) return
+
+        element.setAttribute(
+          "style",
+          replaceWechatStyleImageUrls(template, resolved)
+        )
+        element.removeAttribute("data-wxmp-style-image-error")
+      } catch (error) {
+        if (isCancelled() || !article.contains(element)) return
+
+        console.warn("resolve WeChat style image failed", error)
+        element.setAttribute("data-wxmp-style-image-error", "true")
       }
     })
   )
@@ -811,4 +868,59 @@ function resolveWechatImageDataUrl(src: string) {
 
   resolvedWechatImageCache.set(src, request)
   return request
+}
+
+function markWechatStyleImages(element: Element) {
+  const style = element.getAttribute("style")
+  if (!style) return
+
+  const srcs = extractWechatStyleImageSrcs(style)
+  if (srcs.length === 0) return
+
+  element.setAttribute("data-wxmp-style-template", style)
+  element.setAttribute("data-wxmp-style-image-srcs", JSON.stringify(srcs))
+  element.setAttribute(
+    "style",
+    replaceWechatStyleImageUrls(
+      style,
+      new Map(srcs.map((src) => [src, TRANSPARENT_IMAGE_DATA_URL]))
+    )
+  )
+}
+
+function extractWechatStyleImageSrcs(style: string): string[] {
+  const srcs = new Set<string>()
+
+  for (const match of style.matchAll(createCssUrlPattern())) {
+    const src = normalizeWechatImageUrl(match[2])
+    if (src && isWechatRemoteImageUrl(src)) {
+      srcs.add(src)
+    }
+  }
+
+  return Array.from(srcs)
+}
+
+function replaceWechatStyleImageUrls(
+  style: string,
+  replacements: Map<string, string>
+) {
+  return style.replace(createCssUrlPattern(), (token, _quote, rawUrl) => {
+    const src = normalizeWechatImageUrl(rawUrl)
+    const replacement = src ? replacements.get(src) : null
+    if (!replacement) return token
+    return `url("${replacement}")`
+  })
+}
+
+function parseStyleImageSrcs(value: string | null): string[] {
+  if (!value) return []
+
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is string => typeof item === "string")
+  } catch {
+    return []
+  }
 }
