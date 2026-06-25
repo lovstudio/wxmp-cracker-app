@@ -102,6 +102,8 @@ pub fn run() {
             commands::cache_db_path,
             commands::article_local_file,
             commands::open_article_local_file,
+            commands::reveal_article_local_file,
+            commands::export_article_local,
             commands::resolve_wechat_image,
             commands::search_accounts,
             commands::fetch_account,

@@ -275,8 +275,6 @@ export function ArticleDetail({
   }
 
   const cover = normalizeWechatImageUrl(detail.cover)
-  const localFilePath = localFile?.path ?? null
-  const localFileExists = Boolean(localFile?.exists)
 
   const runArticleAction = (
     action: () => Promise<void> | void,
@@ -291,39 +289,32 @@ export function ArticleDetail({
     runArticleAction(() => openUrl(detail.link), "打开原文失败")
   }
 
+  // The local md is generated on demand for just this article — no need to
+  // export the whole account first.
+  const ensureContent = () => {
+    if (!detail.has_content) {
+      toast.warning("该文章尚未抓取正文，请先抓取正文")
+      return false
+    }
+    return true
+  }
+
   const openLocalFile = () => {
-    if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先导出本地归档")
-      return
-    }
-    if (!localFileExists) {
-      toast.warning("本地文章文件不存在，请重新导出本地归档")
-      return
-    }
+    if (!ensureContent()) return
     runArticleAction(() => api.openArticleLocalFile(aid), "打开本地文件失败")
   }
 
   const revealLocalFile = () => {
-    if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先导出本地归档")
-      return
-    }
-    if (!localFileExists) {
-      toast.warning("本地文章文件不存在，请重新导出本地归档")
-      return
-    }
-    runArticleAction(
-      () => api.revealArchiveFolder(aid),
-      "Reveal 本地文件失败"
-    )
+    if (!ensureContent()) return
+    runArticleAction(() => api.revealArticleLocalFile(aid), "Reveal 本地文件失败")
   }
 
   const copyLocalFilePath = () => {
-    if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先导出本地归档")
-      return
-    }
-    void copyText(localFilePath)
+    if (!ensureContent()) return
+    runArticleAction(async () => {
+      const path = await api.exportArticleLocal(aid)
+      await copyText(path)
+    }, "复制本地路径失败")
   }
 
   const copyOriginalLink = () => {
@@ -459,8 +450,7 @@ function ArticleDetailActionDropdown({
   onCopyLocalFilePath: () => void
   onCopyOriginalLink: () => void
 }) {
-  const localFilePath = localFile?.path ?? null
-  const localFileExists = Boolean(localFile?.exists)
+  const canExport = detail.has_content
 
   return (
     <DropdownMenu>
@@ -489,14 +479,14 @@ function ArticleDetailActionDropdown({
           查看原文
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={!localFileExists}
+          disabled={!canExport}
           onSelect={onOpenLocalFile}
         >
           <FileTextIcon className="size-4" />
           查看本地文件
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={!localFileExists}
+          disabled={!canExport}
           onSelect={onRevealLocalFile}
         >
           <FolderOpenIcon className="size-4" />
@@ -504,7 +494,7 @@ function ArticleDetailActionDropdown({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          disabled={!localFilePath}
+          disabled={!canExport}
           onSelect={onCopyLocalFilePath}
         >
           <CopyIcon className="size-4" />
@@ -540,8 +530,7 @@ function ArticleDetailContextMenu({
   onCopyLocalFilePath: () => void
   onCopyOriginalLink: () => void
 }) {
-  const localFilePath = localFile?.path ?? null
-  const localFileExists = Boolean(localFile?.exists)
+  const canExport = detail.has_content
 
   const run = (action: () => void) => {
     onClose()
@@ -574,7 +563,7 @@ function ArticleDetailContextMenu({
       <button
         role="menuitem"
         className="article-context-item"
-        disabled={!localFileExists}
+        disabled={!canExport}
         onClick={() => run(onOpenLocalFile)}
       >
         <FileTextIcon className="size-3.5" />
@@ -583,7 +572,7 @@ function ArticleDetailContextMenu({
       <button
         role="menuitem"
         className="article-context-item"
-        disabled={!localFileExists}
+        disabled={!canExport}
         onClick={() => run(onRevealLocalFile)}
       >
         <FolderOpenIcon className="size-3.5" />
@@ -593,7 +582,7 @@ function ArticleDetailContextMenu({
       <button
         role="menuitem"
         className="article-context-item"
-        disabled={!localFilePath}
+        disabled={!canExport}
         onClick={() => run(onCopyLocalFilePath)}
       >
         <CopyIcon className="size-3.5" />
