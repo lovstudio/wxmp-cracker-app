@@ -53,6 +53,8 @@ const TRANSPARENT_IMAGE_DATA_URL =
   "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
 const CSS_URL_PATTERN = /url\(\s*(['"]?)(.*?)\1\s*\)/gi
 const createCssUrlPattern = () => new RegExp(CSS_URL_PATTERN)
+const ARTICLE_SCROLL_STORAGE_KEY = "wxmp.articleScrollPositions.v1"
+const ARTICLE_SCROLL_RESTORE_DELAYS_MS = [80, 240, 640]
 
 export function ArticleDetail({
   aid,
@@ -67,6 +69,10 @@ export function ArticleDetail({
   const [contextMenu, setContextMenu] = useState<ArticleDetailMenuState | null>(
     null
   )
+  const scrollHostRef = useRef<HTMLDivElement | null>(null)
+  const activeScrollAidRef = useRef<string | null>(null)
+  const restoringScrollRef = useRef(false)
+  const userScrolledAfterRestoreRef = useRef(false)
 
   useEffect(() => {
     setFetchingContent(false)
@@ -119,6 +125,81 @@ export function ArticleDetail({
       window.removeEventListener("keydown", closeOnEscape)
     }
   }, [contextMenu])
+
+  useEffect(() => {
+    if (!aid || detail?.aid !== aid) return
+
+    const viewport = getArticleScrollViewport(scrollHostRef.current)
+    if (!viewport) return
+
+    activeScrollAidRef.current = aid
+    userScrolledAfterRestoreRef.current = false
+    const savedTop = readArticleScrollPosition(aid)
+
+    if (savedTop <= 0) {
+      viewport.scrollTop = 0
+      return
+    }
+
+    const restore = () => {
+      if (
+        activeScrollAidRef.current !== aid ||
+        userScrolledAfterRestoreRef.current
+      ) {
+        return
+      }
+
+      restoringScrollRef.current = true
+      viewport.scrollTop = clampScrollTop(viewport, savedTop)
+      window.requestAnimationFrame(() => {
+        restoringScrollRef.current = false
+      })
+    }
+
+    const restoreFrame = window.requestAnimationFrame(restore)
+    const restoreTimers = ARTICLE_SCROLL_RESTORE_DELAYS_MS.map((delay) =>
+      window.setTimeout(restore, delay)
+    )
+
+    return () => {
+      window.cancelAnimationFrame(restoreFrame)
+      restoreTimers.forEach((timer) => window.clearTimeout(timer))
+    }
+  }, [aid, detail?.aid, detail?.content_html, detail?.content_md])
+
+  useEffect(() => {
+    if (!aid || detail?.aid !== aid) return
+
+    const viewport = getArticleScrollViewport(scrollHostRef.current)
+    if (!viewport) return
+
+    activeScrollAidRef.current = aid
+    let saveFrame: number | null = null
+
+    const saveScrollPosition = () => {
+      saveFrame = null
+      writeArticleScrollPosition(aid, viewport.scrollTop)
+    }
+
+    const handleScroll = () => {
+      if (!restoringScrollRef.current) {
+        userScrolledAfterRestoreRef.current = true
+      }
+
+      if (saveFrame !== null) return
+      saveFrame = window.requestAnimationFrame(saveScrollPosition)
+    }
+
+    viewport.addEventListener("scroll", handleScroll, { passive: true })
+
+    return () => {
+      if (saveFrame !== null) {
+        window.cancelAnimationFrame(saveFrame)
+      }
+      writeArticleScrollPosition(aid, viewport.scrollTop)
+      viewport.removeEventListener("scroll", handleScroll)
+    }
+  }, [aid, detail?.aid])
 
   const fetchContent = async () => {
     if (!detail || fetchingContent) return
@@ -333,15 +414,17 @@ export function ArticleDetail({
           </div>
         </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="reader-paper">
-          <ArticleBody
-            detail={detail}
-            fetchingContent={fetchingContent}
-            onFetchContent={fetchContent}
-          />
-        </div>
-      </ScrollArea>
+      <div ref={scrollHostRef} className="min-h-0 flex-1">
+        <ScrollArea className="h-full">
+          <div className="reader-paper">
+            <ArticleBody
+              detail={detail}
+              fetchingContent={fetchingContent}
+              onFetchContent={fetchContent}
+            />
+          </div>
+        </ScrollArea>
+      </div>
       {contextMenu && (
         <ArticleDetailContextMenu
           menu={contextMenu}
@@ -629,6 +712,71 @@ function errorMessage(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function getArticleScrollViewport(host: HTMLDivElement | null) {
+  return host?.querySelector<HTMLElement>("[data-slot='scroll-area-viewport']")
+}
+
+function clampScrollTop(viewport: HTMLElement, scrollTop: number) {
+  const maxScrollTop = Math.max(
+    0,
+    viewport.scrollHeight - viewport.clientHeight
+  )
+  return Math.min(Math.max(0, scrollTop), maxScrollTop)
+}
+
+function readArticleScrollPosition(aid: string) {
+  const rawValue = readArticleScrollPositions()[aid]
+  return typeof rawValue === "number" && Number.isFinite(rawValue)
+    ? Math.max(0, rawValue)
+    : 0
+}
+
+function writeArticleScrollPosition(aid: string, scrollTop: number) {
+  try {
+    const positions = readArticleScrollPositions()
+    const normalizedTop = Math.max(0, Math.round(scrollTop))
+
+    if (normalizedTop <= 0) {
+      delete positions[aid]
+    } else {
+      positions[aid] = normalizedTop
+    }
+
+    window.localStorage.setItem(
+      ARTICLE_SCROLL_STORAGE_KEY,
+      JSON.stringify(positions)
+    )
+  } catch {
+    // Ignore storage failures; the reader still works without persistence.
+  }
+}
+
+function readArticleScrollPositions(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(ARTICLE_SCROLL_STORAGE_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : {}
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, number] => {
+        const [aid, scrollTop] = entry
+        return (
+          typeof aid === "string" &&
+          Boolean(aid) &&
+          typeof scrollTop === "number" &&
+          Number.isFinite(scrollTop) &&
+          scrollTop > 0
+        )
+      })
+    )
+  } catch {
+    return {}
+  }
 }
 
 function prepareWechatContentHtml(html: string): string {
