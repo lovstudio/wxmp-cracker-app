@@ -49,8 +49,10 @@ interface Props {
   account?: Account | null
   fakeid: string | null
   activeAid: string | null
+  query?: string
   refreshKey?: number
   onSelect: (aid: string) => void
+  onQueryChange?: (query: string) => void
   onContentFetched?: (aid: string) => void
   onCollectionUpdated?: () => void
 }
@@ -88,8 +90,10 @@ export function ArticleList({
   account,
   fakeid,
   activeAid,
+  query,
   refreshKey = 0,
   onSelect,
+  onQueryChange,
   onContentFetched,
   onCollectionUpdated,
 }: Props) {
@@ -108,7 +112,7 @@ export function ArticleList({
   >([])
   const [cancellingResume, setCancellingResume] = useState(false)
   const [auditDialogOpen, setAuditDialogOpen] = useState(false)
-  const [q, setQ] = useState("")
+  const [uncontrolledQuery, setUncontrolledQuery] = useState("")
   const [menu, setMenu] = useState<ArticleMenuState | null>(null)
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
   const [searchItems, setSearchItems] = useState<ArticleSummary[]>([])
@@ -117,9 +121,16 @@ export function ArticleList({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [contentSearchVersion, setContentSearchVersion] = useState(0)
   const selectedAccount = account?.fakeid === fakeid ? account : null
+  const q = query ?? uncontrolledQuery
   const resumeActiveRef = useRef(false)
   const contentFillCancelRef = useRef(false)
   const articleSearchCacheRef = useRef(new Map<string, ArticleSummary[]>())
+  const updateQuery = (nextQuery: string) => {
+    if (query === undefined) {
+      setUncontrolledQuery(nextQuery)
+    }
+    onQueryChange?.(nextQuery)
+  }
 
   useEffect(() => {
     if (!menu) return
@@ -707,7 +718,7 @@ export function ArticleList({
           <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => updateQuery(e.target.value)}
             placeholder={fakeid ? "搜索标题、摘要或正文" : "请先选择公众号"}
             disabled={!fakeid}
             className="h-9 border-0 bg-transparent pr-8 pl-9 focus-visible:ring-1"
