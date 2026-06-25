@@ -1190,7 +1190,7 @@ input {
   @apply select-text;
   box-sizing: border-box;
   max-width: 100%;
-  padding: 44px clamp(32px, 5.2vw, 74px) 68px;
+  padding: 40px clamp(28px, 3.6vw, 52px) 56px;
   font-family: var(--ui-font-sans);
   font-size: 16px;
   line-height: 1.9;
