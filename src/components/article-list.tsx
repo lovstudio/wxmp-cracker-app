@@ -262,6 +262,7 @@ export function ArticleList({
     trimmedQuery && searchedQuery === trimmedQuery && !searchError
       ? searchItems
       : localFiltered
+  const showCollectionBoundaries = Boolean(fakeid && !loading && !trimmedQuery)
   const nextResumeLimit = nextResumeTarget(items.length)
   const collectionBusy = Boolean(fetchingAid) || resuming
   const canRunCollectionAction =
@@ -648,67 +649,20 @@ export function ArticleList({
             </div>
           </div>
           <div className="mt-0.5 inline-flex shrink-0">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="h-7 rounded-l-lg rounded-r-none border-r-0 px-2.5"
-              disabled={!canResume}
-              title={`向前续抓到 ${nextResumeLimit} 篇索引（最新方向）`}
-              onClick={() => void resumeCollection("forward")}
-            >
-              {resuming ? (
-                <LoaderCircleIcon className="size-3.5 animate-spin" />
-              ) : (
-                <PlayCircleIcon className="size-3.5" />
-              )}
-              {resuming ? `${RESUME_MODE_LABELS[resumeMode]}中` : "向前续抓"}
-            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
-                  size="xs"
+                  size="icon-sm"
                   variant="outline"
-                  className="h-7 rounded-l-none rounded-r-lg px-1.5"
-                  disabled={!canResume && !canAudit}
-                  aria-label="更多抓取选项"
-                  title="更多抓取选项"
+                  disabled={!canAudit && !canFillContent}
+                  aria-label="更多索引工具"
+                  title="更多索引工具"
                 >
                   <ChevronDownIcon className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    void resumeCollection("forward")
-                  }}
-                  disabled={!canResume}
-                >
-                  <PlayCircleIcon className="size-4" />
-                  <div className="flex flex-col">
-                    <span>向前续抓</span>
-                    <span className="text-[11px] text-muted-foreground">
-                      从最新开始，目标 {nextResumeLimit} 篇
-                    </span>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    void resumeCollection("backward")
-                  }}
-                  disabled={!canResume || items.length === 0}
-                >
-                  <HistoryIcon className="size-4" />
-                  <div className="flex flex-col">
-                    <span>向后续抓</span>
-                    <span className="text-[11px] text-muted-foreground">
-                      从本地最老一篇之后向旧再抓 {RESUME_BATCH_SIZE} 篇
-                    </span>
-                  </div>
-                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={(event) => {
                     event.preventDefault()
@@ -765,6 +719,17 @@ export function ArticleList({
         )}
       </div>
       <ScrollArea className="min-h-0 min-w-0 flex-1">
+        {showCollectionBoundaries && items.length > 0 && (
+          <ArticleCollectionBoundary
+            edge="start"
+            mode="forward"
+            busy={resuming && resumeMode === "forward"}
+            disabled={!canResume}
+            itemCount={items.length}
+            targetLimit={nextResumeLimit}
+            onClick={() => void resumeCollection("forward")}
+          />
+        )}
         {loading && (
           <div className="space-y-0">
             {Array.from({ length: 7 }, (_, index) => (
@@ -793,6 +758,22 @@ export function ArticleList({
                 ? "当前公众号还没有本地记录"
                 : "换个关键词试试"}
             </div>
+            {items.length === 0 && !trimmedQuery && (
+              <Button
+                type="button"
+                size="sm"
+                className="mt-4"
+                disabled={!canResume}
+                onClick={() => void resumeCollection("forward")}
+              >
+                {resuming && resumeMode === "forward" ? (
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlayCircleIcon className="size-3.5" />
+                )}
+                抓取首批索引
+              </Button>
+            )}
           </div>
         )}
         {filtered.map((a) => {
@@ -891,6 +872,17 @@ export function ArticleList({
             </button>
           )
         })}
+        {showCollectionBoundaries && items.length > 0 && (
+          <ArticleCollectionBoundary
+            edge="end"
+            mode="backward"
+            busy={resuming && resumeMode === "backward"}
+            disabled={!canResume}
+            itemCount={items.length}
+            targetLimit={nextResumeLimit}
+            onClick={() => void resumeCollection("backward")}
+          />
+        )}
       </ScrollArea>
       {menu && (
         <ArticleContextMenu
@@ -1476,6 +1468,71 @@ function formatProgressMessage(event: FetchAccountProgress) {
   }
 
   return event.message
+}
+
+function ArticleCollectionBoundary({
+  edge,
+  mode,
+  busy,
+  disabled,
+  itemCount,
+  targetLimit,
+  onClick,
+}: {
+  edge: "start" | "end"
+  mode: Extract<FetchMode, "forward" | "backward">
+  busy: boolean
+  disabled: boolean
+  itemCount: number
+  targetLimit: number
+  onClick: () => void
+}) {
+  const isForward = mode === "forward"
+  const Icon = isForward ? PlayCircleIcon : HistoryIcon
+  const batchCount = Math.max(targetLimit - itemCount, 0)
+  const limitReached = itemCount >= MAX_RESUME_LIMIT
+  const description = limitReached
+    ? `已达 ${MAX_RESUME_LIMIT.toLocaleString()} 篇索引上限`
+    : isForward
+      ? `从列表顶部补最新索引，目标 ${targetLimit.toLocaleString()} 篇`
+      : `从列表底部继续向旧抓取 ${batchCount || RESUME_BATCH_SIZE} 篇`
+
+  return (
+    <div
+      className={cn(
+        "px-3 py-2",
+        edge === "start"
+          ? "border-b border-border/70"
+          : "border-t border-border/70"
+      )}
+    >
+      <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/55 px-3 py-2">
+        <div className="min-w-0">
+          <div className="truncate text-xs font-medium text-foreground">
+            {isForward ? "列表起点" : "列表末尾"}
+          </div>
+          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+            {description}
+          </div>
+        </div>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={disabled}
+          onClick={onClick}
+          className="h-7 px-2.5"
+        >
+          {busy ? (
+            <LoaderCircleIcon className="size-3.5 animate-spin" />
+          ) : (
+            <Icon className="size-3.5" />
+          )}
+          {busy ? `${RESUME_MODE_LABELS[mode]}中` : RESUME_MODE_LABELS[mode]}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function ArticleContentStatus({
