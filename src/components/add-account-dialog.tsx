@@ -83,7 +83,7 @@ function AddAccountDialogContent({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResults, setSearchResults] = useState<AccountSearchResult[]>([])
   const [selectedFakeid, setSelectedFakeid] = useState<string | null>(null)
-  const [limit, setLimit] = useState("20")
+  const [limit, setLimit] = useState("10")
   const [withContent, setWithContent] = useState(false)
   const [initialSearchStarted, setInitialSearchStarted] = useState(false)
 

@@ -439,7 +439,7 @@ pub async fn fetch_account(
         });
     }
 
-    let limit = limit.unwrap_or(20).clamp(1, 500);
+    let limit = limit.unwrap_or(10).clamp(1, 500);
 
     tauri::async_runtime::spawn_blocking(move || {
         let wcx = locate_wcx().map_err(|message| CmdError { message })?;
@@ -490,7 +490,7 @@ pub async fn fetch_selected_account(
         });
     }
 
-    let limit = limit.unwrap_or(20).clamp(1, 500);
+    let limit = limit.unwrap_or(10).clamp(1, 500);
     let mode = mode
         .as_deref()
         .map(str::trim)

@@ -70,7 +70,7 @@ type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 type CollectionTask = FetchMode | "content"
 
 const MAX_RESUME_PROGRESS_EVENTS = 24
-const RESUME_BATCH_SIZE = 20
+const DEFAULT_FETCH_LIMIT = 10
 const MAX_RESUME_LIMIT = 500
 const MIN_CONTENT_SEARCH_LENGTH = 2
 const CONTENT_SEARCH_DEBOUNCE_MS = 220
@@ -97,8 +97,11 @@ export function ArticleList({
   const [loading, setLoading] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [resumeMode, setResumeMode] = useState<CollectionTask>("forward")
-  const [resumeLimit, setResumeLimit] = useState(RESUME_BATCH_SIZE)
+  const [resumeLimit, setResumeLimit] = useState(DEFAULT_FETCH_LIMIT)
   const [resumeAuditDate, setResumeAuditDate] = useState<string | null>(null)
+  const [resumeBatchInput, setResumeBatchInput] = useState(
+    String(DEFAULT_FETCH_LIMIT)
+  )
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
   const [resumeProgressEvents, setResumeProgressEvents] = useState<
     FetchAccountProgress[]
@@ -263,7 +266,8 @@ export function ArticleList({
       ? searchItems
       : localFiltered
   const showCollectionBoundaries = Boolean(fakeid && !loading && !trimmedQuery)
-  const nextResumeLimit = nextResumeTarget(items.length)
+  const resumeBatchSize = parseFetchLimitInput(resumeBatchInput)
+  const nextResumeLimit = nextResumeTarget(items.length, resumeBatchSize)
   const collectionBusy = Boolean(fetchingAid) || resuming
   const canRunCollectionAction =
     Boolean(selectedAccount) && !loading && !collectionBusy
@@ -726,7 +730,10 @@ export function ArticleList({
             busy={resuming && resumeMode === "forward"}
             disabled={!canResume}
             itemCount={items.length}
+            batchInput={resumeBatchInput}
+            batchSize={resumeBatchSize}
             targetLimit={nextResumeLimit}
+            onBatchInputChange={setResumeBatchInput}
             onClick={() => void resumeCollection("forward")}
           />
         )}
@@ -759,20 +766,37 @@ export function ArticleList({
                 : "换个关键词试试"}
             </div>
             {items.length === 0 && !trimmedQuery && (
-              <Button
-                type="button"
-                size="sm"
-                className="mt-4"
-                disabled={!canResume}
-                onClick={() => void resumeCollection("forward")}
-              >
-                {resuming && resumeMode === "forward" ? (
-                  <LoaderCircleIcon className="size-3.5 animate-spin" />
-                ) : (
-                  <PlayCircleIcon className="size-3.5" />
-                )}
-                抓取首批索引
-              </Button>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span>本次</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={MAX_RESUME_LIMIT}
+                    value={resumeBatchInput}
+                    disabled={resuming}
+                    onChange={(event) =>
+                      setResumeBatchInput(event.target.value)
+                    }
+                    className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
+                    aria-label="本次抓取篇数"
+                  />
+                  <span>篇</span>
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!canResume}
+                  onClick={() => void resumeCollection("forward")}
+                >
+                  {resuming && resumeMode === "forward" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <PlayCircleIcon className="size-3.5" />
+                  )}
+                  抓取首批 {resumeBatchSize} 篇
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -879,7 +903,10 @@ export function ArticleList({
             busy={resuming && resumeMode === "backward"}
             disabled={!canResume}
             itemCount={items.length}
+            batchInput={resumeBatchInput}
+            batchSize={resumeBatchSize}
             targetLimit={nextResumeLimit}
+            onBatchInputChange={setResumeBatchInput}
             onClick={() => void resumeCollection("backward")}
           />
         )}
@@ -1326,11 +1353,17 @@ function appendProgressEvent(
   return [...events, next].slice(-MAX_RESUME_PROGRESS_EVENTS)
 }
 
-function nextResumeTarget(currentCount: number) {
+function parseFetchLimitInput(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) return DEFAULT_FETCH_LIMIT
+  return Math.min(Math.max(parsed, 1), MAX_RESUME_LIMIT)
+}
+
+function nextResumeTarget(currentCount: number, batchSize: number) {
   const normalizedCount = Math.max(currentCount, 0)
   if (normalizedCount >= MAX_RESUME_LIMIT) return MAX_RESUME_LIMIT
   return Math.min(
-    Math.max(normalizedCount + RESUME_BATCH_SIZE, RESUME_BATCH_SIZE),
+    Math.max(normalizedCount + batchSize, batchSize),
     MAX_RESUME_LIMIT
   )
 }
@@ -1476,7 +1509,10 @@ function ArticleCollectionBoundary({
   busy,
   disabled,
   itemCount,
+  batchInput,
+  batchSize,
   targetLimit,
+  onBatchInputChange,
   onClick,
 }: {
   edge: "start" | "end"
@@ -1484,7 +1520,10 @@ function ArticleCollectionBoundary({
   busy: boolean
   disabled: boolean
   itemCount: number
+  batchInput: string
+  batchSize: number
   targetLimit: number
+  onBatchInputChange: (value: string) => void
   onClick: () => void
 }) {
   const isForward = mode === "forward"
@@ -1495,7 +1534,7 @@ function ArticleCollectionBoundary({
     ? `已达 ${MAX_RESUME_LIMIT.toLocaleString()} 篇索引上限`
     : isForward
       ? `从列表顶部补最新索引，目标 ${targetLimit.toLocaleString()} 篇`
-      : `从列表底部继续向旧抓取 ${batchCount || RESUME_BATCH_SIZE} 篇`
+      : `从列表底部继续向旧抓取 ${batchCount || batchSize} 篇`
 
   return (
     <div
@@ -1506,7 +1545,7 @@ function ArticleCollectionBoundary({
           : "border-t border-border/70"
       )}
     >
-      <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/55 px-3 py-2">
+      <div className="grid min-w-0 gap-2 rounded-lg border border-border/70 bg-card/55 px-3 py-2">
         <div className="min-w-0">
           <div className="truncate text-xs font-medium text-foreground">
             {isForward ? "列表起点" : "列表末尾"}
@@ -1515,21 +1554,37 @@ function ArticleCollectionBoundary({
             {description}
           </div>
         </div>
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={disabled}
-          onClick={onClick}
-          className="h-7 px-2.5"
-        >
-          {busy ? (
-            <LoaderCircleIcon className="size-3.5 animate-spin" />
-          ) : (
-            <Icon className="size-3.5" />
-          )}
-          {busy ? `${RESUME_MODE_LABELS[mode]}中` : RESUME_MODE_LABELS[mode]}
-        </Button>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="shrink-0">本次</span>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_RESUME_LIMIT}
+              value={batchInput}
+              disabled={disabled || busy}
+              onChange={(event) => onBatchInputChange(event.target.value)}
+              className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
+              aria-label="本次抓取篇数"
+            />
+            <span className="shrink-0">篇</span>
+          </label>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={disabled}
+            onClick={onClick}
+            className="h-7 px-2.5"
+          >
+            {busy ? (
+              <LoaderCircleIcon className="size-3.5 animate-spin" />
+            ) : (
+              <Icon className="size-3.5" />
+            )}
+            {busy ? `${RESUME_MODE_LABELS[mode]}中` : RESUME_MODE_LABELS[mode]}
+          </Button>
+        </div>
       </div>
     </div>
   )
