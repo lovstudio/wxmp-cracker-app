@@ -26,7 +26,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   api,
   type ArticleDetail as Detail,
@@ -300,7 +300,7 @@ export function ArticleDetail({
       toast.warning("本地文章文件不存在，请重新导出本地归档")
       return
     }
-    runArticleAction(() => openPath(localFilePath), "打开本地文件失败")
+    runArticleAction(() => api.openArticleLocalFile(aid), "打开本地文件失败")
   }
 
   const revealLocalFile = () => {
@@ -313,7 +313,7 @@ export function ArticleDetail({
       return
     }
     runArticleAction(
-      () => revealItemInDir(localFilePath),
+      () => api.revealArchiveFolder(aid),
       "Reveal 本地文件失败"
     )
   }

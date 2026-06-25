@@ -116,6 +116,8 @@ export const api = {
   cacheDbPath: () => invoke<string>("cache_db_path"),
   articleLocalFile: (aid: string) =>
     invoke<ArticleLocalFile | null>("article_local_file", { aid }),
+  openArticleLocalFile: (aid: string) =>
+    invoke<string>("open_article_local_file", { aid }),
   resolveWechatImage: (url: string) =>
     invoke<ResolvedWechatImage>("resolve_wechat_image", { url }),
   searchAccounts: (query: string) =>
