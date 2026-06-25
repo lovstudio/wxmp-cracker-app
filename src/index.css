@@ -1117,21 +1117,7 @@ input {
   margin: 24px auto 52px;
   width: min(900px, calc(100% - 56px));
   min-height: calc(100% - 76px);
-  overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--article-paper-edge) 88%, white);
-  border-radius: 8px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, white 72%, var(--article-paper)),
-      var(--article-paper) 34%,
-      color-mix(in oklch, var(--article-paper) 94%, var(--primary))
-    ),
-    var(--article-paper);
   color: var(--article-ink);
-  box-shadow:
-    0 1px 0 color-mix(in oklch, white 86%, transparent) inset,
-    0 26px 72px color-mix(in oklch, var(--foreground) 16%, transparent);
 }
 
 .empty-state-panel {
