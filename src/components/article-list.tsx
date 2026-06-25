@@ -267,7 +267,7 @@ export function ArticleList({
       : localFiltered
   const showCollectionBoundaries = Boolean(fakeid && !loading && !trimmedQuery)
   const resumeBatchSize = parseFetchLimitInput(resumeBatchInput)
-  const nextResumeLimit = nextResumeTarget(items.length, resumeBatchSize)
+  const resumeFetchLimit = nextResumeFetchLimit(items.length, resumeBatchSize)
   const collectionBusy = Boolean(fetchingAid) || resuming
   const canRunCollectionAction =
     Boolean(selectedAccount) && !loading && !collectionBusy
@@ -326,7 +326,7 @@ export function ArticleList({
     if (mode === "audit" ? !canAudit : !canResume) return
 
     const initialCount = items.length
-    const targetLimit = mode === "audit" ? MAX_RESUME_LIMIT : nextResumeLimit
+    const targetLimit = mode === "audit" ? MAX_RESUME_LIMIT : resumeFetchLimit
     const label = RESUME_MODE_LABELS[mode]
     const auditDate = mode === "audit" ? (auditSelection?.date ?? null) : null
     const startEvent = initialResumeProgress(
@@ -346,7 +346,7 @@ export function ArticleList({
     toast.info(
       mode === "audit"
         ? `正在检测 ${selectedAccount.nickname}${formatAuditDatePhrase(auditDate)}的文章完备性`
-        : `正在${label} ${selectedAccount.nickname}，目标索引 ${targetLimit} 篇`
+        : `正在${label} ${selectedAccount.nickname}，本次 ${targetLimit} 篇`
     )
     try {
       await api.fetchSelectedAccount(
@@ -732,7 +732,7 @@ export function ArticleList({
             itemCount={items.length}
             batchInput={resumeBatchInput}
             batchSize={resumeBatchSize}
-            targetLimit={nextResumeLimit}
+            fetchLimit={resumeFetchLimit}
             onBatchInputChange={setResumeBatchInput}
             onClick={() => void resumeCollection("forward")}
           />
@@ -905,7 +905,7 @@ export function ArticleList({
             itemCount={items.length}
             batchInput={resumeBatchInput}
             batchSize={resumeBatchSize}
-            targetLimit={nextResumeLimit}
+            fetchLimit={resumeFetchLimit}
             onBatchInputChange={setResumeBatchInput}
             onClick={() => void resumeCollection("backward")}
           />
@@ -1320,7 +1320,7 @@ function initialResumeProgress(
         : `准备${label}，目标重扫 ${limit.toLocaleString()} 篇索引`
       : mode === "content"
         ? `准备补齐 ${limit.toLocaleString()} 篇正文`
-        : `准备${label}到 ${limit.toLocaleString()} 篇文章索引`
+        : `准备${label}，本次 ${limit.toLocaleString()} 篇文章索引`
   return {
     fakeid: account.fakeid,
     nickname: account.nickname,
@@ -1359,13 +1359,10 @@ function parseFetchLimitInput(value: string) {
   return Math.min(Math.max(parsed, 1), MAX_RESUME_LIMIT)
 }
 
-function nextResumeTarget(currentCount: number, batchSize: number) {
+function nextResumeFetchLimit(currentCount: number, batchSize: number) {
   const normalizedCount = Math.max(currentCount, 0)
-  if (normalizedCount >= MAX_RESUME_LIMIT) return MAX_RESUME_LIMIT
-  return Math.min(
-    Math.max(normalizedCount + batchSize, batchSize),
-    MAX_RESUME_LIMIT
-  )
+  if (normalizedCount >= MAX_RESUME_LIMIT) return 1
+  return Math.min(batchSize, MAX_RESUME_LIMIT - normalizedCount)
 }
 
 function sortedArticlesByCreateTime(items: ArticleSummary[]) {
@@ -1511,7 +1508,7 @@ function ArticleCollectionBoundary({
   itemCount,
   batchInput,
   batchSize,
-  targetLimit,
+  fetchLimit,
   onBatchInputChange,
   onClick,
 }: {
@@ -1522,19 +1519,18 @@ function ArticleCollectionBoundary({
   itemCount: number
   batchInput: string
   batchSize: number
-  targetLimit: number
+  fetchLimit: number
   onBatchInputChange: (value: string) => void
   onClick: () => void
 }) {
   const isForward = mode === "forward"
   const Icon = isForward ? PlayCircleIcon : HistoryIcon
-  const batchCount = Math.max(targetLimit - itemCount, 0)
   const limitReached = itemCount >= MAX_RESUME_LIMIT
   const description = limitReached
     ? `已达 ${MAX_RESUME_LIMIT.toLocaleString()} 篇索引上限`
     : isForward
-      ? `从列表顶部补最新索引，目标 ${targetLimit.toLocaleString()} 篇`
-      : `从列表底部继续向旧抓取 ${batchCount || batchSize} 篇`
+      ? `从列表顶部补最新索引，本次 ${fetchLimit.toLocaleString()} 篇`
+      : `从列表底部继续向旧抓取 ${fetchLimit || batchSize} 篇`
 
   return (
     <div
