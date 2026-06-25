@@ -253,6 +253,35 @@ pub fn article_local_file(aid: String) -> Result<Option<ArticleLocalFile>, CmdEr
 }
 
 #[tauri::command]
+pub fn open_article_local_file(aid: String) -> Result<String, CmdError> {
+    let aid = aid.trim().to_string();
+    if aid.is_empty() {
+        return Err(CmdError {
+            message: "缺少文章 ID".to_string(),
+        });
+    }
+
+    // Resolve + open from Rust so the opener bypasses the webview's path scope
+    // (the archive lives outside the app-specific data dir).
+    let Some(path) = archive::article_local_file_path(&aid).map_err(CmdError::from)? else {
+        return Err(CmdError {
+            message: "本地文章文件尚未生成，请先导出本地归档".to_string(),
+        });
+    };
+    if !path.exists() {
+        return Err(CmdError {
+            message: "本地文章文件不存在，请重新导出本地归档".to_string(),
+        });
+    }
+
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|error| CmdError {
+        message: format!("打开本地文件失败: {error}"),
+    })?;
+
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
 pub async fn resolve_wechat_image(url: String) -> Result<ResolvedWechatImage, CmdError> {
     let url = url.trim().to_string();
     if url.is_empty() {
