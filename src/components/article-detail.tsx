@@ -277,7 +277,7 @@ export function ArticleDetail({
   const cover = normalizeWechatImageUrl(detail.cover)
 
   const runArticleAction = (
-    action: () => Promise<void> | void,
+    action: () => Promise<unknown> | void,
     fallbackMessage: string
   ) => {
     void Promise.resolve(action()).catch((error) => {
