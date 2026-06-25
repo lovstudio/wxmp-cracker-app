@@ -97,34 +97,47 @@ pub fn repo_local_path(full_name: &str) -> Result<PathBuf> {
 }
 
 pub fn article_local_file_path(aid: &str) -> Result<Option<PathBuf>> {
-    let settings = load_settings()?;
-    let Some(repo_full_name) = settings.repo_full_name.as_deref() else {
-        return Ok(None);
-    };
+    // Prefer the local-only archive (present once exported), then the GitHub
+    // repo clone. Either uses the same index.json + markdown_path layout.
+    if let Some(path) = resolve_article_in_dir(&archive_dir()?, aid)? {
+        return Ok(Some(path));
+    }
 
-    let repo_dir = repo_local_path(repo_full_name)?;
-    if !repo_dir.exists() {
+    let settings = load_settings()?;
+    if let Some(repo_full_name) = settings.repo_full_name.as_deref() {
+        let repo_dir = repo_local_path(repo_full_name)?;
+        if let Some(path) = resolve_article_in_dir(&repo_dir, aid)? {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Look up an article's markdown file inside one archive dir via its index.json.
+fn resolve_article_in_dir(dir: &Path, aid: &str) -> Result<Option<PathBuf>> {
+    if !dir.exists() {
         return Ok(None);
     }
 
-    let index = load_index(&repo_dir)?;
+    let index = load_index(dir)?;
     let Some(article) = index.articles.get(aid) else {
         return Ok(None);
     };
 
     let relative_path = PathBuf::from(&article.markdown_path);
-    let escapes_repo = relative_path.is_absolute()
+    let escapes_dir = relative_path.is_absolute()
         || relative_path
             .components()
             .any(|component| matches!(component, Component::ParentDir));
-    if escapes_repo {
+    if escapes_dir {
         return Err(anyhow!(
             "归档索引中的文章路径不安全：{}",
             article.markdown_path
         ));
     }
 
-    Ok(Some(repo_dir.join(relative_path)))
+    Ok(Some(dir.join(relative_path)))
 }
 
 // ---- index.json schema ---------------------------------------------------

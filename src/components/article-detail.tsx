@@ -293,11 +293,11 @@ export function ArticleDetail({
 
   const openLocalFile = () => {
     if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      toast.warning("本地文章文件尚未生成，请先导出本地归档")
       return
     }
     if (!localFileExists) {
-      toast.warning("本地文章文件不存在，请重新同步归档仓库")
+      toast.warning("本地文章文件不存在，请重新导出本地归档")
       return
     }
     runArticleAction(() => openPath(localFilePath), "打开本地文件失败")
@@ -305,11 +305,11 @@ export function ArticleDetail({
 
   const revealLocalFile = () => {
     if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      toast.warning("本地文章文件尚未生成，请先导出本地归档")
       return
     }
     if (!localFileExists) {
-      toast.warning("本地文章文件不存在，请重新同步归档仓库")
+      toast.warning("本地文章文件不存在，请重新导出本地归档")
       return
     }
     runArticleAction(
@@ -320,7 +320,7 @@ export function ArticleDetail({
 
   const copyLocalFilePath = () => {
     if (!localFilePath) {
-      toast.warning("本地文章文件尚未生成，请先同步到归档仓库")
+      toast.warning("本地文章文件尚未生成，请先导出本地归档")
       return
     }
     void copyText(localFilePath)
