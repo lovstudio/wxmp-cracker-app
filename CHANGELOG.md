@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 - 2026-06-25
+
+### Added
+
+- Local Markdown archive that works without a GitHub binding: export an account's articles to local md files organized per account under the app data directory.
+- Per-article on-demand export: view, reveal, or copy the path of a single article's local Markdown without exporting the whole account.
+- "Reveal 归档文件夹" action that falls back to the local archive or data directory when no GitHub repo is bound.
+- Article scroll position persistence across navigation and reload.
+- Workspace route state persisted on reload.
+
+### Fixed
+
+- Refill lazy-loaded WeChat image URLs (data-src) so archived Markdown keeps every image instead of emitting empty `![]()`.
+- Resolve an article's local file from the local archive, not just the GitHub repo clone.
+- Open and reveal local files from the backend to bypass the webview path scope.
+- Proxy WeChat body and inline style images in the reader.
+- Align the wcx directional fetch protocol and default article batches to ten.
+
 ## 0.2.1 - 2026-06-25
 
 ### Fixed
