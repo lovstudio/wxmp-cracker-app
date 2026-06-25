@@ -225,17 +225,19 @@ fn render_into_dir(
             },
         );
 
-        let body_hash = sha256_hex(content_md);
+        // Hash the raw source (plus a render version) so the skip check stays
+        // consistent across runs and a renderer change re-renders everything.
+        let source_hash = content_source_hash(content_md);
         if !opts.force {
             if let Some(prev) = index.articles.get(&article.aid) {
-                if prev.content_hash == body_hash {
+                if prev.content_hash == source_hash {
                     skipped += 1;
                     continue;
                 }
             }
         }
 
-        let (markdown_path, processed_body) = render_article(
+        let (markdown_path, _processed_body) = render_article(
             target_dir,
             &account_slug,
             &nickname,
@@ -244,9 +246,6 @@ fn render_into_dir(
             sync_images,
             app,
         )?;
-
-        // Rehash after image rewrites so future runs match.
-        let final_hash = sha256_hex(&processed_body);
 
         index.articles.insert(
             article.aid.clone(),
@@ -261,7 +260,7 @@ fn render_into_dir(
                 create_time: article.create_time,
                 publish_date: publish_date(article.create_time),
                 markdown_path: markdown_path.clone(),
-                content_hash: final_hash,
+                content_hash: source_hash,
             },
         );
         accounts_seen.insert(article.fakeid.clone());
@@ -333,7 +332,10 @@ fn render_article(
     let relative_path = articles_dir.join(&file_name);
     let absolute = repo_dir.join(&relative_path);
 
-    let mut body = content_md.to_string();
+    // wcx converts WeChat HTML to markdown by reading <img src>, but WeChat
+    // lazy-loads images via data-src, leaving empty ![]() in content_md. Refill
+    // those URLs from content_html (in document order) before downloading.
+    let mut body = fill_missing_image_urls(content_md, article.content_html.as_deref());
     if sync_images {
         body = rewrite_and_download_images(
             repo_dir,
@@ -385,6 +387,74 @@ fn yaml_quote(s: &str) -> String {
 
 fn short_hash(s: &str) -> String {
     sha256_hex(s).chars().take(8).collect()
+}
+
+// --- render versioning ----------------------------------------------------
+
+/// Bump when the markdown rendering changes in a way that should re-render
+/// already-archived articles. v2 added data-src image URL repair.
+const RENDER_VERSION: &str = "2";
+
+/// Fingerprint of an article's source content for the skip check. Folds in the
+/// render version so a renderer change invalidates stale entries.
+fn content_source_hash(content_md: &str) -> String {
+    sha256_hex(&format!("{RENDER_VERSION}\u{0}{content_md}"))
+}
+
+// --- image url repair -----------------------------------------------------
+
+/// Fill empty markdown image URLs (`![]()`) using the image URLs found in
+/// `content_html`, matched by document order. WeChat lazy-loads via `data-src`,
+/// which wcx's html→md step misses, so every image can land URL-less.
+fn fill_missing_image_urls(content_md: &str, content_html: Option<&str>) -> String {
+    let Some(html) = content_html else {
+        return content_md.to_string();
+    };
+    let urls = extract_html_image_urls(html);
+    if urls.is_empty() {
+        return content_md.to_string();
+    }
+
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Match any markdown image, empty URL included (`[^)]*`).
+    let re = RE.get_or_init(|| Regex::new(r"!\[([^\]]*)\]\(([^)]*)\)").expect("md image regex"));
+
+    let mut idx = 0usize;
+    let out = re.replace_all(content_md, |caps: &regex::Captures| {
+        let alt = &caps[1];
+        let existing = caps[2].trim();
+        let url = if existing.is_empty() {
+            urls.get(idx).cloned().unwrap_or_default()
+        } else {
+            existing.to_string()
+        };
+        idx += 1;
+        format!("![{alt}]({url})")
+    });
+    out.into_owned()
+}
+
+/// Image URLs from `<img>` tags, preferring `data-src` over `src`, in order.
+fn extract_html_image_urls(html: &str) -> Vec<String> {
+    static IMG: OnceLock<Regex> = OnceLock::new();
+    static DATA_SRC: OnceLock<Regex> = OnceLock::new();
+    static SRC: OnceLock<Regex> = OnceLock::new();
+    let img = IMG.get_or_init(|| Regex::new(r"(?is)<img\b[^>]*>").expect("img regex"));
+    let data_src = DATA_SRC
+        .get_or_init(|| Regex::new(r#"(?is)\bdata-src\s*=\s*["']([^"']+)["']"#).expect("data-src"));
+    // Avoid matching the `src` inside `data-src` by forbidding a leading `-`.
+    let src = SRC
+        .get_or_init(|| Regex::new(r#"(?is)[^-a-z]src\s*=\s*["']([^"']+)["']"#).expect("src"));
+
+    img.find_iter(html)
+        .filter_map(|m| {
+            let tag = m.as_str();
+            data_src
+                .captures(tag)
+                .or_else(|| src.captures(tag))
+                .map(|c| c[1].to_string())
+        })
+        .collect()
 }
 
 // --- image download / rewrite --------------------------------------------
