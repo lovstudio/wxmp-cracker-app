@@ -39,6 +39,18 @@ const ACCOUNT_ORDER_STORAGE_KEY = "wxmp.accountOrder"
 const ARCHIVED_ACCOUNTS_STORAGE_KEY = "wxmp.archivedAccounts"
 const PINNED_ACCOUNTS_STORAGE_KEY = "wxmp.pinnedAccounts"
 const MAX_FETCH_PROGRESS_EVENTS = 36
+const WORKSPACE_ROUTE_TAB_PARAM = "tab"
+const WORKSPACE_ROUTE_ACCOUNT_PARAM = "account"
+const WORKSPACE_ROUTE_ARTICLE_PARAM = "article"
+const WORKSPACE_ROUTE_QUERY_PARAM = "q"
+const WORKSPACE_TAB_IDS = [
+  "reader",
+  "collection",
+  "profile",
+  "trends",
+  "style",
+  "github-sync",
+] satisfies WorkspaceTabId[]
 
 export default function App() {
   return (
@@ -57,7 +69,15 @@ type PendingFetch = {
   withContent: boolean
 }
 
+type WorkspaceRouteState = {
+  aid: string | null
+  fakeid: string | null
+  query: string
+  tab: WorkspaceTabId
+}
+
 function WorkspaceApp() {
+  const [initialRoute] = useState(() => readWorkspaceRoute())
   const {
     isLoading: lovstudioAuthLoading,
     profile,
@@ -74,8 +94,12 @@ function WorkspaceApp() {
   const [pinnedFakeids, setPinnedFakeids] = useState<string[]>(() =>
     readStringList(PINNED_ACCOUNTS_STORAGE_KEY)
   )
-  const [activeFakeid, setActiveFakeid] = useState<string | null>(null)
-  const [activeAid, setActiveAid] = useState<string | null>(null)
+  const [activeFakeid, setActiveFakeid] = useState<string | null>(
+    initialRoute.fakeid
+  )
+  const [activeAid, setActiveAid] = useState<string | null>(initialRoute.aid)
+  const [articleQuery, setArticleQuery] = useState(initialRoute.query)
+  const [accountsLoaded, setAccountsLoaded] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
   const [authAccount, setAuthAccount] = useState<LoginAccount | null>(null)
   const [lastLoginAt, setLastLoginAt] = useState<number | null>(null)
@@ -91,7 +115,7 @@ function WorkspaceApp() {
     FetchAccountProgress[]
   >([])
   const [articleRefreshKey, setArticleRefreshKey] = useState(0)
-  const [activeTab, setActiveTab] = useState<WorkspaceTabId>("reader")
+  const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialRoute.tab)
   const orderedAccounts = useMemo(
     () => orderAccounts(accounts, accountOrder),
     [accounts, accountOrder]
@@ -155,6 +179,8 @@ function WorkspaceApp() {
       if (isTauri()) {
         toast.error(`读取缓存失败: ${e}`)
       }
+    } finally {
+      setAccountsLoaded(true)
     }
   }, [])
 
@@ -250,6 +276,33 @@ function WorkspaceApp() {
   useEffect(() => {
     writeStringList(PINNED_ACCOUNTS_STORAGE_KEY, pinnedFakeids)
   }, [pinnedFakeids])
+
+  useEffect(() => {
+    if (!accountsLoaded || activeFakeid === selectedFakeid) {
+      return
+    }
+
+    setActiveFakeid(selectedFakeid)
+    if (activeFakeid) {
+      setActiveAid(null)
+    }
+  }, [accountsLoaded, activeFakeid, selectedFakeid])
+
+  useEffect(() => {
+    writeWorkspaceRoute({
+      aid: activeAid,
+      fakeid: accountsLoaded ? selectedFakeid : activeFakeid,
+      query: articleQuery,
+      tab: activeTab,
+    })
+  }, [
+    accountsLoaded,
+    activeAid,
+    activeFakeid,
+    activeTab,
+    articleQuery,
+    selectedFakeid,
+  ])
 
   const openAddAccount = (initialQuery?: string) => {
     if (!lovstudioAccountId) {
@@ -516,8 +569,10 @@ function WorkspaceApp() {
                     account={activeAccount}
                     fakeid={selectedFakeid}
                     activeAid={activeAid}
+                    query={articleQuery}
                     refreshKey={articleRefreshKey}
                     onSelect={setActiveAid}
+                    onQueryChange={setArticleQuery}
                     onContentFetched={() => {
                       setArticleRefreshKey((key) => key + 1)
                     }}
@@ -754,6 +809,83 @@ function authUserMetadataString(
   }
 
   return null
+}
+
+function readWorkspaceRoute(): WorkspaceRouteState {
+  const params = new URLSearchParams(window.location.search)
+
+  return {
+    aid: readOptionalRouteParam(params, WORKSPACE_ROUTE_ARTICLE_PARAM, "aid"),
+    fakeid: readOptionalRouteParam(
+      params,
+      WORKSPACE_ROUTE_ACCOUNT_PARAM,
+      "fakeid"
+    ),
+    query: params.get(WORKSPACE_ROUTE_QUERY_PARAM) ?? "",
+    tab: parseWorkspaceTab(params.get(WORKSPACE_ROUTE_TAB_PARAM)),
+  }
+}
+
+function writeWorkspaceRoute(route: WorkspaceRouteState) {
+  const url = new URL(window.location.href)
+
+  setWorkspaceRouteParam(
+    url.searchParams,
+    WORKSPACE_ROUTE_TAB_PARAM,
+    route.tab === "reader" ? null : route.tab
+  )
+  setWorkspaceRouteParam(
+    url.searchParams,
+    WORKSPACE_ROUTE_ACCOUNT_PARAM,
+    route.fakeid
+  )
+  setWorkspaceRouteParam(
+    url.searchParams,
+    WORKSPACE_ROUTE_ARTICLE_PARAM,
+    route.aid
+  )
+  setWorkspaceRouteParam(
+    url.searchParams,
+    WORKSPACE_ROUTE_QUERY_PARAM,
+    route.query || null
+  )
+  url.searchParams.delete("fakeid")
+  url.searchParams.delete("aid")
+
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  const next = `${url.pathname}${url.search}${url.hash}`
+
+  if (next !== current) {
+    window.history.replaceState(window.history.state, "", next)
+  }
+}
+
+function parseWorkspaceTab(value: string | null): WorkspaceTabId {
+  return WORKSPACE_TAB_IDS.includes(value as WorkspaceTabId)
+    ? (value as WorkspaceTabId)
+    : "reader"
+}
+
+function readOptionalRouteParam(
+  params: URLSearchParams,
+  key: string,
+  fallbackKey: string
+) {
+  const value = params.get(key) ?? params.get(fallbackKey)
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function setWorkspaceRouteParam(
+  params: URLSearchParams,
+  key: string,
+  value: string | null
+) {
+  if (value) {
+    params.set(key, value)
+  } else {
+    params.delete(key)
+  }
 }
 
 function readStringList(key: string): string[] {
