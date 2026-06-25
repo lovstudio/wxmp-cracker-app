@@ -10,6 +10,7 @@ import {
   ExternalLinkIcon,
   FileTextIcon,
   FileX2Icon,
+  FolderOpenIcon,
   HistoryIcon,
   LinkIcon,
   LoaderCircleIcon,
@@ -27,6 +28,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
@@ -43,7 +45,7 @@ import {
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
-import { openUrl } from "@tauri-apps/plugin-opener"
+import { openPath, openUrl } from "@tauri-apps/plugin-opener"
 
 interface Props {
   account?: Account | null
@@ -291,6 +293,16 @@ export function ArticleList({
   )
   const missingContentCount = items.length - cachedCount
   const canFillContent = canRunCollectionAction && missingContentCount > 0
+
+  const revealStorageFolder = async () => {
+    try {
+      const cachePath = await api.cacheDbPath()
+      const folderPath = parentPath(cachePath)
+      await openPath(folderPath)
+    } catch (error) {
+      toast.error(`Reveal 存储文件夹失败：${errorMessage(error)}`)
+    }
+  }
 
   const fetchArticleContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
@@ -670,9 +682,8 @@ export function ArticleList({
                   type="button"
                   size="icon-sm"
                   variant="outline"
-                  disabled={!canAudit && !canFillContent}
-                  aria-label="更多索引工具"
-                  title="更多索引工具"
+                  aria-label="更多索引与存储工具"
+                  title="更多索引与存储工具"
                 >
                   <ChevronDownIcon className="size-3.5" />
                 </Button>
@@ -707,6 +718,20 @@ export function ArticleList({
                       {missingContentCount > 0
                         ? `逐篇抓取 ${missingContentCount.toLocaleString()} 篇缺失正文`
                         : "所有文章正文均已抓取"}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    void revealStorageFolder()
+                  }}
+                >
+                  <FolderOpenIcon className="size-4" />
+                  <div className="flex flex-col">
+                    <span>Reveal 存储文件夹</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      打开 wcx 本地缓存所在目录
                     </span>
                   </div>
                 </DropdownMenuItem>
@@ -1686,6 +1711,15 @@ function highlightText(text: string, query: string): ReactNode {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function parentPath(path: string): string {
+  const normalized = path.replace(/[/\\]+$/, "")
+  const separatorIndex = Math.max(
+    normalized.lastIndexOf("/"),
+    normalized.lastIndexOf("\\")
+  )
+  return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized
 }
 
 function ArticleContextMenu({
