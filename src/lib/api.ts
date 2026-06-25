@@ -152,8 +152,11 @@ export const api = {
     invoke<GhRepoBrief>("github_create_repo", { name, private: isPrivate }),
   githubSyncSettingsGet: () =>
     invoke<GhSyncSettings>("github_sync_settings_get"),
-  revealArchiveFolder: (aid?: string | null) =>
-    invoke<string>("reveal_archive_folder", { aid: aid ?? null }),
+  revealArchiveFolder: (aid?: string | null, accountFakeid?: string | null) =>
+    invoke<string>("reveal_archive_folder", {
+      aid: aid ?? null,
+      accountFakeid: accountFakeid ?? null,
+    }),
   githubSyncSettingsSet: (settings: GhSyncSettings) =>
     invoke<GhSyncSettings>("github_sync_settings_set", { settings }),
   githubSyncArticles: (options: GhSyncOptions) =>

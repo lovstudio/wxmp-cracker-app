@@ -296,7 +296,7 @@ export function ArticleList({
 
   const revealArchiveFolder = async () => {
     try {
-      await api.revealArchiveFolder(activeAid)
+      await api.revealArchiveFolder(activeAid, fakeid)
     } catch (error) {
       toast.error(`Reveal 归档文件夹失败：${errorMessage(error)}`)
     }
@@ -304,15 +304,15 @@ export function ArticleList({
 
   const [exportingArchive, setExportingArchive] = useState(false)
   const exportLocalArchive = async () => {
-    if (exportingArchive) return
+    if (exportingArchive || !selectedAccount) return
     setExportingArchive(true)
-    toast.info("正在导出本地 Markdown 归档…")
+    toast.info(`正在导出 ${selectedAccount.nickname} 的本地 Markdown 归档…`)
     try {
-      const summary = await api.archiveArticlesLocal()
-      toast.success(
-        `已导出 ${summary.rendered} 篇文章（${summary.accounts} 个公众号）到本地归档`
-      )
-      await api.revealArchiveFolder()
+      const summary = await api.archiveArticlesLocal({
+        account_fakeid: selectedAccount.fakeid,
+      })
+      toast.success(`已导出 ${summary.rendered} 篇文章到本地归档`)
+      await api.revealArchiveFolder(null, selectedAccount.fakeid)
     } catch (error) {
       toast.error(`导出本地归档失败：${errorMessage(error)}`)
     } finally {
@@ -743,13 +743,13 @@ export function ArticleList({
                     event.preventDefault()
                     void exportLocalArchive()
                   }}
-                  disabled={exportingArchive}
+                  disabled={exportingArchive || !selectedAccount}
                 >
                   <DownloadIcon className="size-4" />
                   <div className="flex flex-col">
                     <span>导出本地归档（Markdown）</span>
                     <span className="text-[11px] text-muted-foreground">
-                      将各公众号正文导出为本地 md，按公众号分目录
+                      将当前公众号正文导出为本地 md 并打开目录
                     </span>
                   </div>
                 </DropdownMenuItem>
@@ -757,12 +757,13 @@ export function ArticleList({
                   onSelect={() => {
                     void revealArchiveFolder()
                   }}
+                  disabled={!selectedAccount}
                 >
                   <FolderOpenIcon className="size-4" />
                   <div className="flex flex-col">
                     <span>Reveal 归档文件夹</span>
                     <span className="text-[11px] text-muted-foreground">
-                      打开本地归档、归档仓库或数据目录
+                      打开当前公众号的本地归档目录
                     </span>
                   </div>
                 </DropdownMenuItem>

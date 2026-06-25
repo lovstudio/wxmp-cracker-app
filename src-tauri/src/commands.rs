@@ -1343,7 +1343,10 @@ pub fn github_sync_settings_get() -> Result<archive::SyncSettings, CmdError> {
 }
 
 #[tauri::command]
-pub fn reveal_archive_folder(aid: Option<String>) -> Result<String, CmdError> {
+pub fn reveal_archive_folder(
+    aid: Option<String>,
+    account_fakeid: Option<String>,
+) -> Result<String, CmdError> {
     let normalized_aid = aid
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
@@ -1361,6 +1364,25 @@ pub fn reveal_archive_folder(aid: Option<String>) -> Result<String, CmdError> {
                     .display()
                     .to_string());
             }
+        }
+    }
+
+    // Scoped to a single account: open that account's local archive folder
+    // (its `articles` md list) directly.
+    let normalized_fakeid = account_fakeid
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(fakeid) = normalized_fakeid.as_deref() {
+        if let Some(dir) = account_archive_dir(fakeid).map_err(CmdError::from)? {
+            if dir.exists() {
+                tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|error| CmdError {
+                    message: format!("打开公众号归档目录失败: {error}"),
+                })?;
+                return Ok(dir.display().to_string());
+            }
+            return Err(CmdError {
+                message: "当前公众号尚未导出本地归档，请先点「导出本地归档」".to_string(),
+            });
         }
     }
 
@@ -1385,6 +1407,22 @@ pub fn reveal_archive_folder(aid: Option<String>) -> Result<String, CmdError> {
     })?;
 
     Ok(target.display().to_string())
+}
+
+/// Resolve an account's local archive folder, preferring its `articles`
+/// subdir (the md list) when present. Returns None if the account is unknown.
+fn account_archive_dir(fakeid: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let Some(account) = db::get_account(fakeid)? else {
+        return Ok(None);
+    };
+    let slug = archive::title_slug(&account.nickname, 40);
+    let account_dir = archive::archive_dir()?.join("accounts").join(slug);
+    let articles_dir = account_dir.join("articles");
+    Ok(Some(if articles_dir.exists() {
+        articles_dir
+    } else {
+        account_dir
+    }))
 }
 
 #[tauri::command]
