@@ -45,7 +45,7 @@ import {
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener"
+import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface Props {
   account?: Account | null
@@ -294,12 +294,11 @@ export function ArticleList({
   const missingContentCount = items.length - cachedCount
   const canFillContent = canRunCollectionAction && missingContentCount > 0
 
-  const revealStorageFolder = async () => {
+  const revealArchiveFolder = async () => {
     try {
-      const cachePath = await api.cacheDbPath()
-      await revealItemInDir(cachePath)
+      await api.revealArchiveFolder(activeAid)
     } catch (error) {
-      toast.error(`Reveal 存储文件夹失败：${errorMessage(error)}`)
+      toast.error(`Reveal 归档文件夹失败：${errorMessage(error)}`)
     }
   }
 
@@ -723,14 +722,14 @@ export function ArticleList({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={() => {
-                    void revealStorageFolder()
+                    void revealArchiveFolder()
                   }}
                 >
                   <FolderOpenIcon className="size-4" />
                   <div className="flex flex-col">
-                    <span>Reveal 存储文件夹</span>
+                    <span>Reveal 归档文件夹</span>
                     <span className="text-[11px] text-muted-foreground">
-                      打开 wcx 本地缓存所在目录
+                      打开当前文章 Markdown 或归档仓库目录
                     </span>
                   </div>
                 </DropdownMenuItem>

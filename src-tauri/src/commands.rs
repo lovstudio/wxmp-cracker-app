@@ -1343,6 +1343,50 @@ pub fn github_sync_settings_get() -> Result<archive::SyncSettings, CmdError> {
 }
 
 #[tauri::command]
+pub fn reveal_archive_folder(aid: Option<String>) -> Result<String, CmdError> {
+    let normalized_aid = aid
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if let Some(aid) = normalized_aid.as_deref() {
+        if let Some(path) = archive::article_local_file_path(aid).map_err(CmdError::from)? {
+            if !path.exists() {
+                return Err(CmdError {
+                    message: "当前文章归档文件不存在，请重新同步归档仓库".to_string(),
+                });
+            }
+
+            tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|error| CmdError {
+                message: format!("Reveal 归档文章失败: {error}"),
+            })?;
+
+            return Ok(path
+                .parent()
+                .unwrap_or(path.as_path())
+                .display()
+                .to_string());
+        }
+    }
+
+    let settings = archive::load_settings().map_err(CmdError::from)?;
+    let repo_full_name = settings.repo_full_name.as_deref().ok_or_else(|| CmdError {
+        message: "尚未选择归档仓库，请先在 GitHub 归档设置中绑定仓库".to_string(),
+    })?;
+    let repo_dir = archive::repo_local_path(repo_full_name).map_err(CmdError::from)?;
+    if !repo_dir.exists() {
+        return Err(CmdError {
+            message: "本地归档仓库尚未生成，请先同步一次 GitHub 归档".to_string(),
+        });
+    }
+
+    tauri_plugin_opener::open_path(&repo_dir, None::<&str>).map_err(|error| CmdError {
+        message: format!("打开归档文件夹失败: {error}"),
+    })?;
+
+    Ok(repo_dir.display().to_string())
+}
+
+#[tauri::command]
 pub fn github_sync_settings_set(
     settings: archive::SyncSettings,
 ) -> Result<archive::SyncSettings, CmdError> {
