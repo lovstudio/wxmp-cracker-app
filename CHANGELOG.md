@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1 - 2026-07-02
+
+### Added
+
+- Added WeChat login account management actions with backend support for refreshed authentication state.
+- Added a GIAC 2026 Shenzhen agenda article to the local article output.
+
+### Changed
+
+- Refined article reader spacing and scroll area layout for a wider, cleaner reading surface.
+- Updated the bundled wcx sidecar to include publish-only article support.
+
+### Fixed
+
+- Hardened WeChat login webview capture.
+- Removed the duplicate WeChat account setup action.
+
 ## 0.3.0 - 2026-06-25
 
 ### Added
