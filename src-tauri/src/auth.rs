@@ -3,15 +3,24 @@ use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    webview::{Cookie, PageLoadEvent},
+    AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder,
+};
 
 use crate::db::config_path;
 
 const LOGIN_URL: &str = "https://mp.weixin.qq.com/";
 const LOGIN_LABEL: &str = "wxmp-login";
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const LOGIN_COOKIE_CAPTURE_ATTEMPTS: usize = 20;
+const LOGIN_COOKIE_CAPTURE_DELAY_MS: u64 = 500;
+const REQUIRED_LOGIN_COOKIE: &str = "slave_sid";
+
+type LoginCaptureState = Arc<Mutex<Option<String>>>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LoginStatus {
@@ -105,12 +114,19 @@ pub async fn current_status() -> LoginStatus {
 /// `login://success` to the main webview, and close the login window.
 pub fn open_login_window(app: &AppHandle) -> Result<()> {
     if let Some(existing) = app.get_webview_window(LOGIN_LABEL) {
+        if let Ok(url) = LOGIN_URL.parse() {
+            let _ = existing.navigate(url);
+        }
         let _ = existing.show();
         let _ = existing.set_focus();
         return Ok(());
     }
 
     let app_handle = app.clone();
+    let page_load_app_handle = app.clone();
+    let capture_state: LoginCaptureState = Arc::new(Mutex::new(None));
+    let navigation_capture_state = capture_state.clone();
+    let page_load_capture_state = capture_state.clone();
     let win = WebviewWindowBuilder::new(
         app,
         LOGIN_LABEL,
@@ -120,33 +136,24 @@ pub fn open_login_window(app: &AppHandle) -> Result<()> {
     .inner_size(960.0, 720.0)
     .center()
     .resizable(true)
+    .user_agent(USER_AGENT_VALUE)
     .on_navigation(move |url| {
         // Stay inside mp.weixin.qq.com only. Block redirects to system browser.
-        let host_ok = matches!(url.host_str(), Some(h) if h.ends_with("weixin.qq.com") || h.ends_with("qq.com"));
+        let host_ok = is_allowed_login_url(url);
 
         // Detect token in URL query.
-        if host_ok {
-            if let Some(token) = url
-                .query_pairs()
-                .find(|(k, _)| k == "token")
-                .map(|(_, v)| v.into_owned())
-            {
-                if !token.is_empty() {
-                    let app2 = app_handle.clone();
-                    // Defer cookie capture so the page settles.
-                    tauri::async_runtime::spawn(async move {
-                        // Give the page a beat to set all cookies.
-                        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                        if let Err(e) = capture_and_persist(&app2, &token).await {
-                            log::error!("login capture failed: {e:?}");
-                            let _ = app2.emit("login://error", e.to_string());
-                        }
-                    });
-                }
-            }
+        if let Some(token) = login_token_from_url(url) {
+            schedule_login_capture(&app_handle, token, &navigation_capture_state);
         }
 
         host_ok
+    })
+    .on_page_load(move |_window, payload| {
+        if matches!(payload.event(), PageLoadEvent::Finished) {
+            if let Some(token) = login_token_from_url(payload.url()) {
+                schedule_login_capture(&page_load_app_handle, token, &page_load_capture_state);
+            }
+        }
     })
     .build()?;
 
@@ -168,29 +175,74 @@ pub fn logout(app: &AppHandle) -> Result<()> {
     }
 }
 
+fn is_allowed_login_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && matches!(url.host_str(), Some(h) if host_matches_domain(h, "qq.com"))
+}
+
+fn host_matches_domain(host: &str, domain: &str) -> bool {
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn login_token_from_url(url: &Url) -> Option<String> {
+    if !is_allowed_login_url(url) {
+        return None;
+    }
+
+    url.query_pairs()
+        .find(|(key, _)| key == "token")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn schedule_login_capture(app: &AppHandle, token: String, state: &LoginCaptureState) {
+    let should_capture = match state.lock() {
+        Ok(mut active_token) => {
+            if active_token.is_some() {
+                false
+            } else {
+                *active_token = Some(token.clone());
+                true
+            }
+        }
+        Err(e) => {
+            log::warn!("login capture state lock poisoned: {e}");
+            false
+        }
+    };
+
+    if !should_capture {
+        return;
+    }
+
+    let app2 = app.clone();
+    let state2 = state.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = capture_and_persist(&app2, &token).await {
+            log::error!("login capture failed: {e:?}");
+            reset_login_capture_state(&state2, &token);
+            let _ = app2.emit("login://error", e.to_string());
+        }
+    });
+}
+
+fn reset_login_capture_state(state: &LoginCaptureState, token: &str) {
+    if let Ok(mut active_token) = state.lock() {
+        if active_token.as_deref() == Some(token) {
+            *active_token = None;
+        }
+    }
+}
+
 async fn capture_and_persist(app: &AppHandle, token: &str) -> Result<()> {
     let win = app
         .get_webview_window(LOGIN_LABEL)
         .ok_or_else(|| anyhow!("login window vanished"))?;
 
-    // Tauri exposes cookies on the WebviewWindow via the underlying webview.
-    // We grab all cookies for the mp.weixin.qq.com domain (incl. HttpOnly).
-    let cookies = win.cookies().map_err(|e| anyhow!("cookies(): {e}"))?;
-
-    // Build the standard "k=v; k=v" header value wcx expects.
-    let mut pairs: Vec<String> = Vec::new();
-    for c in cookies {
-        let name = c.name().to_string();
-        let value = c.value().to_string();
-        if name.is_empty() {
-            continue;
-        }
-        pairs.push(format!("{name}={value}"));
-    }
-    if pairs.is_empty() {
-        return Err(anyhow!("no cookies captured"));
-    }
-    let cookie = pairs.join("; ");
+    let (cookie, cookie_count) = capture_login_cookie_header(&win).await?;
 
     let mut cfg = WcxConfig {
         token: token.to_string(),
@@ -206,12 +258,83 @@ async fn capture_and_persist(app: &AppHandle, token: &str) -> Result<()> {
 
     write_config(&cfg)?;
 
-    log::info!("login captured: token={} ({} cookies)", token, pairs.len());
+    log::info!("login captured: token={} ({} cookies)", token, cookie_count);
     let _ = app.emit("login://success", &cfg);
 
     // Close the login window. Main UI will refetch status.
     let _ = win.close();
     Ok(())
+}
+
+async fn capture_login_cookie_header(win: &tauri::WebviewWindow) -> Result<(String, usize)> {
+    let login_url: Url = LOGIN_URL.parse().context("parse login URL")?;
+    let mut last_error = None;
+
+    for attempt in 1..=LOGIN_COOKIE_CAPTURE_ATTEMPTS {
+        match read_login_cookie_header_once(win, login_url.clone()) {
+            Ok(cookie) => return Ok(cookie),
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+
+        if attempt < LOGIN_COOKIE_CAPTURE_ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                LOGIN_COOKIE_CAPTURE_DELAY_MS,
+            ))
+            .await;
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("no cookies captured")))
+}
+
+fn read_login_cookie_header_once(
+    win: &tauri::WebviewWindow,
+    login_url: Url,
+) -> Result<(String, usize)> {
+    match win.cookies_for_url(login_url) {
+        Ok(cookies) => match build_login_cookie_header(cookies) {
+            Ok(cookie) => Ok(cookie),
+            Err(scoped_error) => win
+                .cookies()
+                .map_err(|e| anyhow!("{scoped_error}; cookies(): {e}"))
+                .and_then(build_login_cookie_header),
+        },
+        Err(scoped_error) => win
+            .cookies()
+            .map_err(|e| anyhow!("cookies_for_url(): {scoped_error}; cookies(): {e}"))
+            .and_then(build_login_cookie_header),
+    }
+}
+
+fn build_login_cookie_header(cookies: Vec<Cookie<'static>>) -> Result<(String, usize)> {
+    let mut pairs: Vec<String> = Vec::new();
+    let mut has_required_cookie = false;
+
+    for c in cookies {
+        let name = c.name().trim().to_string();
+        let value = c.value().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        if name == REQUIRED_LOGIN_COOKIE && !value.is_empty() {
+            has_required_cookie = true;
+        }
+        pairs.push(format!("{name}={value}"));
+    }
+
+    if pairs.is_empty() {
+        return Err(anyhow!("no cookies captured"));
+    }
+    if !has_required_cookie {
+        return Err(anyhow!(
+            "login cookies not ready: missing {REQUIRED_LOGIN_COOKIE}"
+        ));
+    }
+
+    let cookie_count = pairs.len();
+    Ok((pairs.join("; "), cookie_count))
 }
 
 async fn fetch_login_account(cfg: &WcxConfig) -> Result<LoginAccount> {
@@ -380,4 +503,38 @@ fn config_modified_at() -> Option<i64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_token_from_url_accepts_wechat_token() {
+        let url: Url = "https://mp.weixin.qq.com/cgi-bin/home?t=home/index&token=12345&lang=zh_CN"
+            .parse()
+            .unwrap();
+
+        assert_eq!(login_token_from_url(&url).as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn login_token_from_url_rejects_external_hosts() {
+        let url: Url = "https://example.com/callback?token=12345".parse().unwrap();
+
+        assert_eq!(login_token_from_url(&url), None);
+    }
+
+    #[test]
+    fn allowed_login_url_is_limited_to_wechat_hosts() {
+        let mp_url: Url = "https://mp.weixin.qq.com/".parse().unwrap();
+        let qq_url: Url = "https://res.wx.qq.com/a.js".parse().unwrap();
+        let external_url: Url = "https://example.com/".parse().unwrap();
+        let fake_qq_url: Url = "https://badqq.com/".parse().unwrap();
+
+        assert!(is_allowed_login_url(&mp_url));
+        assert!(is_allowed_login_url(&qq_url));
+        assert!(!is_allowed_login_url(&external_url));
+        assert!(!is_allowed_login_url(&fake_qq_url));
+    }
 }
