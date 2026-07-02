@@ -841,56 +841,54 @@ function AppSettingsWindow({
                           配置账号
                         </Button>
                       ) : (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={openAddAccount}
-                        >
-                          <PlusIcon className="size-3.5" />
-                          添加公众号
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={loggedIn ? onLogin : openAddAccount}
-                      >
-                        {loggedIn ? (
-                          <KeyRoundIcon className="size-3.5" />
-                        ) : (
-                          <PlusIcon className="size-3.5" />
-                        )}
-                        {loggedIn ? "切换账号" : "添加公众号"}
-                      </Button>
-                      {loggedIn ? (
-                        !confirmingWechatRemoval ? (
+                        <Fragment>
                           <Button
                             type="button"
-                            variant="destructive"
-                            onClick={() => setConfirmingWechatRemoval(true)}
+                            variant="outline"
+                            onClick={openAddAccount}
                           >
-                            <Trash2Icon className="size-3.5" />
-                            移除账号
+                            <PlusIcon className="size-3.5" />
+                            添加公众号
                           </Button>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              onClick={() => setConfirmingWechatRemoval(false)}
-                            >
-                              取消
-                            </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={onLogin}
+                          >
+                            <KeyRoundIcon className="size-3.5" />
+                            切换账号
+                          </Button>
+                          {!confirmingWechatRemoval ? (
                             <Button
                               type="button"
                               variant="destructive"
-                              onClick={confirmWechatRemoval}
+                              onClick={() => setConfirmingWechatRemoval(true)}
                             >
-                              确认移除
+                              <Trash2Icon className="size-3.5" />
+                              移除账号
                             </Button>
-                          </div>
-                        )
-                      ) : null}
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() =>
+                                  setConfirmingWechatRemoval(false)
+                                }
+                              >
+                                取消
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                onClick={confirmWechatRemoval}
+                              >
+                                确认移除
+                              </Button>
+                            </div>
+                          )}
+                        </Fragment>
+                      )}
                     </div>
                     <div className="mt-4 grid gap-3">
                       <WechatSelfCapabilityPreferenceControl />
