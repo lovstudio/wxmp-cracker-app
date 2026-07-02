@@ -38,9 +38,11 @@ import {
   MoreHorizontalIcon,
   PinIcon,
   PinOffIcon,
+  PlusIcon,
   RotateCcwIcon,
   SearchIcon,
   Settings2Icon,
+  Trash2Icon,
   UserRoundIcon,
   XIcon,
 } from "lucide-react"
@@ -95,6 +97,7 @@ interface Props {
   onSelect: (fakeid: string) => void
   onAddAccount: (query?: string) => void
   onLogin: () => void
+  onLogoutWechatAccount: () => void
   onReorder: (activeFakeid: string, overFakeid: string) => void
   onArchive: (fakeid: string) => void
   onRestore: (fakeid: string) => void
@@ -145,6 +148,7 @@ export function AccountSidebar({
   onSelect,
   onAddAccount,
   onLogin,
+  onLogoutWechatAccount,
   onReorder,
   onArchive,
   onRestore,
@@ -490,7 +494,9 @@ export function AccountSidebar({
           lovstudioUserId={lovstudioUserId}
           initialPane={settingsPane}
           onClose={() => setSettingsOpen(false)}
+          onAddAccount={() => onAddAccount()}
           onLogin={onLogin}
+          onLogoutWechatAccount={onLogoutWechatAccount}
           onLovstudioLogin={onLovstudioLogin}
           onLovstudioLogout={onLovstudioLogout}
         />
@@ -529,7 +535,9 @@ function AppSettingsWindow({
   lovstudioUserId,
   initialPane,
   onClose,
+  onAddAccount,
   onLogin,
+  onLogoutWechatAccount,
   onLovstudioLogin,
   onLovstudioLogout,
 }: {
@@ -549,19 +557,30 @@ function AppSettingsWindow({
   lovstudioUserId: string | null
   initialPane: SettingsPane
   onClose: () => void
+  onAddAccount: () => void
   onLogin: () => void
+  onLogoutWechatAccount: () => void
   onLovstudioLogin: () => void
   onLovstudioLogout: () => void
 }) {
   const [activePane, setActivePane] = useState<SettingsPane>(initialPane)
   const [confirmingLogout, setConfirmingLogout] = useState(false)
+  const [confirmingWechatRemoval, setConfirmingWechatRemoval] = useState(false)
   const openLovstudioLogin = () => {
     onClose()
     onLovstudioLogin()
   }
+  const openAddAccount = () => {
+    onClose()
+    onAddAccount()
+  }
   const confirmLovstudioLogout = () => {
     setConfirmingLogout(false)
     onLovstudioLogout()
+  }
+  const confirmWechatRemoval = () => {
+    setConfirmingWechatRemoval(false)
+    onLogoutWechatAccount()
   }
 
   return createPortal(
@@ -793,10 +812,6 @@ function AppSettingsWindow({
                             : "未配置"}
                         </div>
                       </div>
-                      <Button type="button" variant="outline" onClick={onLogin}>
-                        <KeyRoundIcon className="size-3.5" />
-                        {loggedIn ? "更新" : "配置"}
-                      </Button>
                     </div>
                     {loggedIn ? (
                       <div className="mt-4 grid gap-2 rounded-lg bg-muted/55 p-3 text-xs text-muted-foreground">
@@ -819,6 +834,64 @@ function AppSettingsWindow({
                         ) : null}
                       </div>
                     ) : null}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {!loggedIn ? (
+                        <Button type="button" onClick={onLogin}>
+                          <KeyRoundIcon className="size-3.5" />
+                          配置账号
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={openAddAccount}
+                        >
+                          <PlusIcon className="size-3.5" />
+                          添加公众号
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={loggedIn ? onLogin : openAddAccount}
+                      >
+                        {loggedIn ? (
+                          <KeyRoundIcon className="size-3.5" />
+                        ) : (
+                          <PlusIcon className="size-3.5" />
+                        )}
+                        {loggedIn ? "切换账号" : "添加公众号"}
+                      </Button>
+                      {loggedIn ? (
+                        !confirmingWechatRemoval ? (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={() => setConfirmingWechatRemoval(true)}
+                          >
+                            <Trash2Icon className="size-3.5" />
+                            移除账号
+                          </Button>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={() => setConfirmingWechatRemoval(false)}
+                            >
+                              取消
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              onClick={confirmWechatRemoval}
+                            >
+                              确认移除
+                            </Button>
+                          </div>
+                        )
+                      ) : null}
+                    </div>
                     <div className="mt-4 grid gap-3">
                       <WechatSelfCapabilityPreferenceControl />
                       <WechatCommercialAuthorizationSetting variant="connection" />

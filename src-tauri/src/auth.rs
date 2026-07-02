@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
+    fs, io,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -153,6 +153,19 @@ pub fn open_login_window(app: &AppHandle) -> Result<()> {
     let _ = win.show();
 
     Ok(())
+}
+
+pub fn logout(app: &AppHandle) -> Result<()> {
+    if let Some(existing) = app.get_webview_window(LOGIN_LABEL) {
+        let _ = existing.close();
+    }
+
+    let p = config_path()?;
+    match fs::remove_file(&p) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("remove {:?}", p)),
+    }
 }
 
 async fn capture_and_persist(app: &AppHandle, token: &str) -> Result<()> {
