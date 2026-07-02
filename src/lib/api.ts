@@ -100,6 +100,7 @@ export interface LicenseStatus {
 export const api = {
   authStatus: () => invoke<AuthStatus>("auth_status"),
   openLogin: () => invoke<void>("open_login"),
+  authLogout: () => invoke<void>("auth_logout"),
   licenseStatus: (accountId?: string | null) =>
     invoke<LicenseStatus>("license_status", { accountId: accountId ?? null }),
   activateLicense: (code: string, accountId: string) =>

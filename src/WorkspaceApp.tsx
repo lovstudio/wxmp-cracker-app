@@ -223,6 +223,22 @@ function WorkspaceApp() {
     setArticleRefreshKey((key) => key + 1)
   }, [refreshAccounts])
 
+  const openWechatLogin = useCallback(() => {
+    api
+      .openLogin()
+      .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
+  }, [])
+
+  const logoutWechatAccount = useCallback(async () => {
+    try {
+      await api.authLogout()
+      await refreshAuth()
+      toast.success("已移除公众号登录凭证")
+    } catch (e) {
+      toast.error(`移除公众号登录凭证失败: ${errorMessage(e)}`)
+    }
+  }, [refreshAuth])
+
   useAutoUpdate()
 
   useWxmpGatewayWorker({
@@ -313,9 +329,7 @@ function WorkspaceApp() {
 
     if (!loggedIn) {
       toast.wxmpError("请先扫码登录微信公众号", api.openLogin)
-      api
-        .openLogin()
-        .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
+      openWechatLogin()
       return
     }
     setFetchProgressEvents([])
@@ -529,11 +543,8 @@ function WorkspaceApp() {
             onAddAccount={openAddAccount}
             onLovstudioLogin={() => setLovstudioAuthOpen(true)}
             onLovstudioLogout={() => void signOutLovstudio()}
-            onLogin={() => {
-              api
-                .openLogin()
-                .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
-            }}
+            onLogin={openWechatLogin}
+            onLogoutWechatAccount={() => void logoutWechatAccount()}
             onSelect={(id) => {
               setActiveFakeid(id)
               setActiveAid(null)
@@ -626,11 +637,7 @@ function WorkspaceApp() {
           }
         }}
         onSearch={api.searchAccounts}
-        onLogin={() => {
-          api
-            .openLogin()
-            .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
-        }}
+        onLogin={openWechatLogin}
         onSubmit={addAccount}
       />
       {licenseStatus && !licenseStatus.active ? (
@@ -699,7 +706,8 @@ function errorMessage(error: unknown): string {
   if (
     message.includes("Command license_status not found") ||
     message.includes("Command activate_license not found") ||
-    message.includes("Command sync_remote_license not found")
+    message.includes("Command sync_remote_license not found") ||
+    message.includes("Command auth_logout not found")
   ) {
     return "授权命令未加载。请完全退出当前 Tauri 应用后重新启动，Rust 后端会重新编译并注册授权命令。"
   }

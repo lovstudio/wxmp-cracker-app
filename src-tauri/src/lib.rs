@@ -92,6 +92,7 @@ pub fn run() {
             greet,
             commands::auth_status,
             commands::open_login,
+            commands::auth_logout,
             commands::license_status,
             commands::activate_license,
             commands::sync_remote_license,

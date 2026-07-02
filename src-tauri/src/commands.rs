@@ -188,6 +188,11 @@ pub fn open_login(app: AppHandle) -> Result<(), CmdError> {
 }
 
 #[tauri::command]
+pub fn auth_logout(app: AppHandle) -> Result<(), CmdError> {
+    auth::logout(&app).map_err(Into::into)
+}
+
+#[tauri::command]
 pub fn license_status(account_id: Option<String>) -> Result<license::LicenseStatus, CmdError> {
     let account_id = normalize_optional_account_id(account_id);
     license::status(account_id.as_deref()).map_err(Into::into)
