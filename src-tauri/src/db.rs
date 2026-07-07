@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 /// Locate wcx's cache.db. Mirrors wcx's own logic: macOS = ~/Library/Application Support/wcx,
 /// Linux = $XDG_DATA_HOME/wcx or ~/.local/share/wcx, Windows = %APPDATA%/wcx.
@@ -17,35 +17,51 @@ pub fn config_path() -> Result<PathBuf> {
 
 fn open() -> Result<Connection> {
     let p = cache_db_path()?;
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("mkdir {:?}", parent))?;
+    }
     let conn = Connection::open(&p).with_context(|| format!("open {:?}", p))?;
-    ensure_runtime_indexes(&conn)?;
+    ensure_runtime_schema(&conn)?;
     Ok(conn)
 }
 
-fn ensure_runtime_indexes(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "articles")? || !table_exists(conn, "accounts")? {
-        return Ok(());
-    }
-
+fn ensure_runtime_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_articles_fakeid_create_time
+        "CREATE TABLE IF NOT EXISTS accounts (
+             fakeid TEXT PRIMARY KEY,
+             nickname TEXT NOT NULL,
+             alias TEXT,
+             signature TEXT,
+             round_head_img TEXT,
+             updated_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS articles (
+             aid TEXT PRIMARY KEY,
+             fakeid TEXT NOT NULL,
+             title TEXT NOT NULL,
+             link TEXT NOT NULL,
+             digest TEXT,
+             cover TEXT,
+             author TEXT,
+             create_time INTEGER NOT NULL,
+             update_time INTEGER,
+             content_html TEXT,
+             content_md TEXT,
+             fetched_at INTEGER NOT NULL,
+             FOREIGN KEY (fakeid) REFERENCES accounts(fakeid)
+         );
+
+         CREATE INDEX IF NOT EXISTS idx_articles_fakeid
+             ON articles(fakeid);
+         CREATE INDEX IF NOT EXISTS idx_articles_create_time
+             ON articles(create_time DESC);
+         CREATE INDEX IF NOT EXISTS idx_articles_fakeid_create_time
              ON articles(fakeid, create_time DESC);
          CREATE INDEX IF NOT EXISTS idx_accounts_updated_at
              ON accounts(updated_at DESC);",
     )?;
     Ok(())
-}
-
-fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
-    let exists = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
-            [table],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(exists)
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -88,6 +104,28 @@ pub struct ArticleDetail {
     pub has_content: bool,
     pub content_html: Option<String>,
     pub content_md: Option<String>,
+}
+
+pub struct AccountUpsert<'a> {
+    pub fakeid: &'a str,
+    pub nickname: &'a str,
+    pub alias: Option<&'a str>,
+    pub signature: Option<&'a str>,
+    pub avatar: Option<&'a str>,
+}
+
+pub struct ArticleUpsert<'a> {
+    pub aid: &'a str,
+    pub fakeid: &'a str,
+    pub title: &'a str,
+    pub link: &'a str,
+    pub digest: Option<&'a str>,
+    pub cover: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub create_time: i64,
+    pub update_time: Option<i64>,
+    pub content_html: Option<&'a str>,
+    pub content_md: Option<&'a str>,
 }
 
 pub fn list_accounts() -> Result<Vec<Account>> {
@@ -443,6 +481,70 @@ pub fn set_article_content(aid: &str, content_html: &str, content_md: &str) -> R
          WHERE aid = ?3",
         (content_html, content_md, aid),
     )?;
+    Ok(())
+}
+
+pub fn upsert_account_and_article(
+    account: &AccountUpsert<'_>,
+    article: &ArticleUpsert<'_>,
+) -> Result<()> {
+    let mut conn = open()?;
+    let tx = conn.transaction()?;
+
+    tx.execute(
+        "INSERT INTO accounts
+            (fakeid, nickname, alias, signature, round_head_img, updated_at)
+         VALUES
+            (?1, ?2, ?3, ?4, ?5, CAST(strftime('%s', 'now') AS INTEGER))
+         ON CONFLICT(fakeid) DO UPDATE SET
+            nickname = excluded.nickname,
+            alias = excluded.alias,
+            signature = excluded.signature,
+            round_head_img = excluded.round_head_img,
+            updated_at = excluded.updated_at",
+        (
+            account.fakeid,
+            account.nickname,
+            account.alias,
+            account.signature,
+            account.avatar,
+        ),
+    )?;
+
+    tx.execute(
+        "INSERT INTO articles
+            (aid, fakeid, title, link, digest, cover, author,
+             create_time, update_time, content_html, content_md, fetched_at)
+         VALUES
+            (?1, ?2, ?3, ?4, ?5, ?6, ?7,
+             ?8, ?9, ?10, ?11, CAST(strftime('%s', 'now') AS INTEGER))
+         ON CONFLICT(aid) DO UPDATE SET
+            title = excluded.title,
+            link = excluded.link,
+            digest = excluded.digest,
+            cover = excluded.cover,
+            author = excluded.author,
+            create_time = excluded.create_time,
+            update_time = excluded.update_time,
+            content_html = excluded.content_html,
+            content_md = excluded.content_md,
+            fetched_at = excluded.fetched_at",
+        (
+            article.aid,
+            article.fakeid,
+            article.title,
+            article.link,
+            article.digest,
+            article.cover,
+            article.author,
+            article.create_time,
+            article.update_time,
+            article.content_html,
+            article.content_md,
+        ),
+    )?;
+
+    tx.commit()?;
     Ok(())
 }
 

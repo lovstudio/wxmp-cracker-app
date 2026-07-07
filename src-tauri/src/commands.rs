@@ -1,4 +1,5 @@
 use base64::Engine as _;
+use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -76,6 +77,19 @@ struct ArticleContentPayload {
     md: String,
 }
 
+#[derive(Default)]
+struct ArticlePageMetadata {
+    biz: Option<String>,
+    appmsgid: Option<String>,
+    itemidx: Option<String>,
+    title: Option<String>,
+    account_nickname: Option<String>,
+    author: Option<String>,
+    digest: Option<String>,
+    cover: Option<String>,
+    create_time: Option<i64>,
+}
+
 const FETCH_ACCOUNT_PROGRESS_EVENT: &str = "fetch-account://progress";
 const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
 const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -84,6 +98,7 @@ const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
 const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(12);
+const WECHAT_ARTICLE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_MAX_BYTES: u64 = 12 * 1024 * 1024;
 
@@ -141,6 +156,7 @@ static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
     OnceLock::new();
 static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+static WECHAT_ARTICLE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
 impl Drop for ActiveFetchGuard {
@@ -920,6 +936,575 @@ pub async fn fetch_article_content(
     .map_err(|e| CmdError {
         message: format!("正文抓取任务失败: {e}"),
     })?
+}
+
+#[tauri::command]
+pub async fn import_article_link(link: String) -> Result<ArticleDetail, CmdError> {
+    let url = normalize_wechat_article_link(&link)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let wcx = locate_wcx().map_err(|message| CmdError { message })?;
+        let content =
+            fetch_single_article_content(&wcx, url.as_str()).map_err(|message| CmdError {
+                message: format!("抓取文章正文失败: {message}"),
+            })?;
+        let (content_html, content_md) = normalize_article_content(content)?;
+
+        let mut metadata = article_metadata_from_url(&url);
+        match fetch_article_page_metadata(&url) {
+            Ok(page_metadata) => metadata.merge_missing(page_metadata),
+            Err(error) => log::warn!("article metadata fetch failed: {error}"),
+        }
+
+        let itemidx = metadata
+            .itemidx
+            .as_deref()
+            .and_then(clean_optional_string)
+            .unwrap_or_else(|| "1".to_string());
+        let standard_aid = metadata
+            .appmsgid
+            .as_deref()
+            .and_then(clean_optional_string)
+            .map(|appmsgid| format!("{appmsgid}_{itemidx}"));
+        let existing = standard_aid
+            .as_deref()
+            .map(db::get_article)
+            .transpose()
+            .map_err(CmdError::from)?
+            .flatten();
+        let aid = existing
+            .as_ref()
+            .map(|article| article.aid.clone())
+            .unwrap_or_else(|| format!("direct_{}", short_hash(url.as_str(), 16)));
+        let fakeid = existing
+            .as_ref()
+            .map(|article| article.fakeid.clone())
+            .or_else(|| metadata.biz.as_deref().and_then(clean_optional_string))
+            .unwrap_or_else(|| format!("direct-{}", short_hash(url.as_str(), 12)));
+        let existing_account = db::get_account(&fakeid).map_err(CmdError::from)?;
+        let account_nickname = existing_account
+            .as_ref()
+            .map(|account| account.nickname.clone())
+            .or_else(|| {
+                metadata
+                    .account_nickname
+                    .as_deref()
+                    .and_then(clean_optional_string)
+            })
+            .or_else(|| metadata.author.as_deref().and_then(clean_optional_string))
+            .unwrap_or_else(|| format!("公众号 {}", short_label(&fakeid, 8)));
+        let title = metadata
+            .title
+            .as_deref()
+            .and_then(clean_optional_string)
+            .or_else(|| existing.as_ref().map(|article| article.title.clone()))
+            .unwrap_or_else(|| format!("微信文章 {}", short_hash(url.as_str(), 8)));
+        let create_time = metadata
+            .create_time
+            .filter(|value| *value > 0)
+            .or_else(|| existing.as_ref().map(|article| article.create_time))
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let digest = metadata
+            .digest
+            .as_deref()
+            .and_then(clean_optional_string)
+            .or_else(|| existing.as_ref().and_then(|article| article.digest.clone()));
+        let cover = metadata
+            .cover
+            .as_deref()
+            .and_then(clean_optional_string)
+            .or_else(|| existing.as_ref().and_then(|article| article.cover.clone()));
+        let author = metadata
+            .author
+            .as_deref()
+            .and_then(clean_optional_string)
+            .or_else(|| existing.as_ref().and_then(|article| article.author.clone()));
+        let link = url.to_string();
+
+        let account = db::AccountUpsert {
+            fakeid: &fakeid,
+            nickname: &account_nickname,
+            alias: None,
+            signature: None,
+            avatar: None,
+        };
+        let article = db::ArticleUpsert {
+            aid: &aid,
+            fakeid: &fakeid,
+            title: &title,
+            link: &link,
+            digest: digest.as_deref(),
+            cover: cover.as_deref(),
+            author: author.as_deref(),
+            create_time,
+            update_time: Some(create_time),
+            content_html: Some(content_html.as_str()),
+            content_md: Some(content_md.as_str()),
+        };
+
+        db::upsert_account_and_article(&account, &article).map_err(CmdError::from)?;
+        db::get_article(&aid)
+            .map_err(CmdError::from)?
+            .ok_or_else(|| CmdError {
+                message: "文章已写入，但重新读取缓存失败".to_string(),
+            })
+    })
+    .await
+    .map_err(|e| CmdError {
+        message: format!("文章链接导入任务失败: {e}"),
+    })?
+}
+
+impl ArticlePageMetadata {
+    fn merge_missing(&mut self, other: ArticlePageMetadata) {
+        if self.biz.is_none() {
+            self.biz = other.biz;
+        }
+        if self.appmsgid.is_none() {
+            self.appmsgid = other.appmsgid;
+        }
+        if self.itemidx.is_none() {
+            self.itemidx = other.itemidx;
+        }
+        if self.title.is_none() {
+            self.title = other.title;
+        }
+        if self.account_nickname.is_none() {
+            self.account_nickname = other.account_nickname;
+        }
+        if self.author.is_none() {
+            self.author = other.author;
+        }
+        if self.digest.is_none() {
+            self.digest = other.digest;
+        }
+        if self.cover.is_none() {
+            self.cover = other.cover;
+        }
+        if self.create_time.is_none() {
+            self.create_time = other.create_time;
+        }
+    }
+}
+
+fn normalize_wechat_article_link(value: &str) -> Result<reqwest::Url, CmdError> {
+    let candidate = extract_first_url(value)
+        .unwrap_or_else(|| value.trim().to_string())
+        .replace("&amp;", "&");
+    if candidate.trim().is_empty() {
+        return Err(CmdError {
+            message: "请输入微信公众号文章链接".to_string(),
+        });
+    }
+
+    let mut url = reqwest::Url::parse(candidate.trim()).map_err(|error| CmdError {
+        message: format!("文章链接无效: {error}"),
+    })?;
+    if url.scheme() == "http" {
+        let _ = url.set_scheme("https");
+    }
+    if !matches!(url.scheme(), "https") {
+        return Err(CmdError {
+            message: "只支持 https 微信公众号文章链接".to_string(),
+        });
+    }
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("mp.weixin.qq.com"))
+    {
+        return Err(CmdError {
+            message: "只支持 mp.weixin.qq.com 的公众号文章链接".to_string(),
+        });
+    }
+
+    let path = url.path();
+    let looks_like_article = path.starts_with("/s")
+        || path.contains("appmsg")
+        || query_param(&url, "__biz").is_some()
+        || query_param(&url, "sn").is_some();
+    if !looks_like_article {
+        return Err(CmdError {
+            message: "请输入具体的微信公众号文章链接".to_string(),
+        });
+    }
+
+    Ok(url)
+}
+
+fn extract_first_url(value: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>]+"#).expect("url regex"));
+    re.find(value).map(|matched| {
+        matched
+            .as_str()
+            .trim_end_matches([
+                ',', '.', ';', ':', '，', '。', '；', '：', ')', '）', ']', '】',
+            ])
+            .to_string()
+    })
+}
+
+fn normalize_article_content(content: ArticleContentPayload) -> Result<(String, String), CmdError> {
+    let mut html = content.html.trim().to_string();
+    let mut md = content.md.trim().to_string();
+
+    if html.is_empty() && md.is_empty() {
+        return Err(CmdError {
+            message: "抓取完成，但文章正文为空".to_string(),
+        });
+    }
+
+    if md.is_empty() {
+        md = collapse_whitespace(&strip_html_tags(&html));
+    }
+    if html.is_empty() {
+        html = markdown_text_to_html(&md);
+    }
+
+    Ok((html, md))
+}
+
+fn article_metadata_from_url(url: &reqwest::Url) -> ArticlePageMetadata {
+    ArticlePageMetadata {
+        biz: query_param(url, "__biz"),
+        appmsgid: query_param(url, "mid").or_else(|| query_param(url, "appmsgid")),
+        itemidx: query_param(url, "idx").or_else(|| query_param(url, "itemidx")),
+        ..ArticlePageMetadata::default()
+    }
+}
+
+fn fetch_article_page_metadata(url: &reqwest::Url) -> Result<ArticlePageMetadata, CmdError> {
+    let response = wechat_article_client()?
+        .get(url.clone())
+        .send()
+        .map_err(|error| CmdError {
+            message: format!("微信文章元数据请求失败: {error}"),
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(CmdError {
+            message: format!(
+                "微信文章元数据 HTTP {status}: {}",
+                truncate_for_error(&body, 200)
+            ),
+        });
+    }
+    let html = response.text().map_err(|error| CmdError {
+        message: format!("读取微信文章元数据失败: {error}"),
+    })?;
+
+    Ok(parse_article_page_metadata(&html))
+}
+
+fn parse_article_page_metadata(html: &str) -> ArticlePageMetadata {
+    ArticlePageMetadata {
+        biz: extract_js_string(html, &["biz", "__biz", "user_name"]),
+        appmsgid: extract_js_string(html, &["appmsgid", "mid"]),
+        itemidx: extract_js_string(html, &["itemidx", "idx"]),
+        title: extract_element_text_by_class(html, "rich_media_title")
+            .or_else(|| extract_js_string(html, &["msg_title"]))
+            .or_else(|| extract_meta_content(html, &["og:title", "twitter:title"]))
+            .or_else(|| extract_title_tag(html)),
+        account_nickname: extract_element_text_by_id(html, "js_name")
+            .or_else(|| extract_js_string(html, &["nickname", "nick_name"])),
+        author: extract_js_string(html, &["author"])
+            .or_else(|| extract_meta_content(html, &["author", "article:author"])),
+        digest: extract_js_string(html, &["msg_desc"])
+            .or_else(|| extract_meta_content(html, &["og:description", "description"])),
+        cover: extract_js_string(html, &["msg_cdn_url", "cdn_url"])
+            .or_else(|| extract_meta_content(html, &["og:image", "twitter:image"])),
+        create_time: extract_js_i64(html, &["ct", "createTime", "publish_time"]),
+    }
+}
+
+fn wechat_article_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
+    WECHAT_ARTICLE_CLIENT
+        .get_or_init(build_wechat_article_client)
+        .as_ref()
+        .map_err(|message| CmdError {
+            message: message.clone(),
+        })
+}
+
+fn build_wechat_article_client() -> Result<reqwest::blocking::Client, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(WECHAT_USER_AGENT));
+    headers.insert(REFERER, HeaderValue::from_static(WECHAT_REFERER_URL));
+
+    reqwest::blocking::Client::builder()
+        .default_headers(headers)
+        .timeout(WECHAT_ARTICLE_PAGE_TIMEOUT)
+        .build()
+        .map_err(|error| format!("初始化微信文章客户端失败: {error}"))
+}
+
+fn query_param(url: &reqwest::Url, key: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+        .and_then(|value| clean_optional_string(&value))
+}
+
+fn extract_meta_content(html: &str, keys: &[&str]) -> Option<String> {
+    static META_RE: OnceLock<Regex> = OnceLock::new();
+    let meta_re = META_RE.get_or_init(|| Regex::new(r"(?is)<meta\b[^>]*>").expect("meta regex"));
+
+    meta_re.find_iter(html).find_map(|tag| {
+        let tag = tag.as_str();
+        let key = attr_value(tag, "property")
+            .or_else(|| attr_value(tag, "name"))
+            .or_else(|| attr_value(tag, "itemprop"))?;
+        if !keys
+            .iter()
+            .any(|candidate| key.eq_ignore_ascii_case(candidate))
+        {
+            return None;
+        }
+        attr_value(tag, "content").and_then(|content| clean_optional_string(&content))
+    })
+}
+
+fn attr_value(tag: &str, attr: &str) -> Option<String> {
+    let attr = regex::escape(attr);
+    let double = Regex::new(&format!(r#"(?is)\b{attr}\s*=\s*"([^"]*)""#)).expect("attr regex");
+    let single = Regex::new(&format!(r#"(?is)\b{attr}\s*=\s*'([^']*)'"#)).expect("attr regex");
+    double
+        .captures(tag)
+        .or_else(|| single.captures(tag))
+        .and_then(|captures| {
+            captures
+                .get(1)
+                .map(|value| decode_html_text(value.as_str()))
+        })
+}
+
+fn extract_title_tag(html: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?is)<title\b[^>]*>(.*?)</title>").expect("title"));
+    re.captures(html)
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| {
+            clean_optional_string(&decode_html_text(&strip_html_tags(value.as_str())))
+        })
+}
+
+fn extract_element_text_by_id(html: &str, id: &str) -> Option<String> {
+    let id = regex::escape(id);
+    let re = Regex::new(&format!(
+        r#"(?is)<(?:a|span|div|h1|h2)\b[^>]*\bid\s*=\s*["']{id}["'][^>]*>(.*?)</(?:a|span|div|h1|h2)>"#
+    ))
+    .expect("id element regex");
+    re.captures(html)
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| {
+            clean_optional_string(&decode_html_text(&strip_html_tags(value.as_str())))
+        })
+}
+
+fn extract_element_text_by_class(html: &str, class_name: &str) -> Option<String> {
+    let class_name = regex::escape(class_name);
+    let re = Regex::new(&format!(
+        r#"(?is)<(?:h1|h2|div|span)\b[^>]*\bclass\s*=\s*["'][^"']*{class_name}[^"']*["'][^>]*>(.*?)</(?:h1|h2|div|span)>"#
+    ))
+    .expect("class element regex");
+    re.captures(html)
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| {
+            clean_optional_string(&decode_html_text(&strip_html_tags(value.as_str())))
+        })
+}
+
+fn extract_js_string(html: &str, names: &[&str]) -> Option<String> {
+    for name in names {
+        let escaped = regex::escape(name);
+        let double = Regex::new(&format!(
+            r#"(?s)(?:var\s+)?{escaped}\s*=\s*"((?:\\.|[^"\\])*)""#
+        ))
+        .expect("js string regex");
+        let single = Regex::new(&format!(
+            r#"(?s)(?:var\s+)?{escaped}\s*=\s*'((?:\\.|[^'\\])*)'"#
+        ))
+        .expect("js string regex");
+        let json_double = Regex::new(&format!(r#"(?s)"{escaped}"\s*:\s*"((?:\\.|[^"\\])*)""#))
+            .expect("json string regex");
+
+        if let Some(value) = double
+            .captures(html)
+            .or_else(|| single.captures(html))
+            .or_else(|| json_double.captures(html))
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| {
+                clean_optional_string(&decode_html_text(&unescape_js_string(value.as_str())))
+            })
+        {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn extract_js_i64(html: &str, names: &[&str]) -> Option<i64> {
+    for name in names {
+        let escaped = regex::escape(name);
+        let re = Regex::new(&format!(
+            r#"(?s)(?:var\s+)?{escaped}\s*=\s*["']?([0-9]{{8,}})["']?"#
+        ))
+        .expect("js int regex");
+        if let Some(value) = re
+            .captures(html)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<i64>().ok())
+        {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn unescape_js_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+
+        match chars.next() {
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some('t') => output.push('\t'),
+            Some('\\') => output.push('\\'),
+            Some('"') => output.push('"'),
+            Some('\'') => output.push('\''),
+            Some('/') => output.push('/'),
+            Some('x') => {
+                let code = take_hex(&mut chars, 2);
+                if let Some(ch) = code.and_then(|code| char::from_u32(code)) {
+                    output.push(ch);
+                }
+            }
+            Some('u') => {
+                let code = take_hex(&mut chars, 4);
+                if let Some(ch) = code.and_then(|code| char::from_u32(code)) {
+                    output.push(ch);
+                }
+            }
+            Some(other) => output.push(other),
+            None => output.push('\\'),
+        }
+    }
+
+    output
+}
+
+fn take_hex<I>(chars: &mut std::iter::Peekable<I>, count: usize) -> Option<u32>
+where
+    I: Iterator<Item = char>,
+{
+    let mut value = String::new();
+    for _ in 0..count {
+        let ch = chars.next()?;
+        if !ch.is_ascii_hexdigit() {
+            return None;
+        }
+        value.push(ch);
+    }
+    u32::from_str_radix(&value, 16).ok()
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut output = String::with_capacity(html.len());
+    let mut inside_tag = false;
+
+    for ch in html.chars() {
+        match ch {
+            '<' => inside_tag = true,
+            '>' => {
+                inside_tag = false;
+                output.push(' ');
+            }
+            _ if !inside_tag => output.push(ch),
+            _ => {}
+        }
+    }
+
+    output
+}
+
+fn decode_html_text(value: &str) -> String {
+    let decoded = value
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'");
+
+    decode_numeric_entities(&decoded)
+}
+
+fn decode_numeric_entities(value: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"&#(x[0-9a-fA-F]+|\d+);").expect("entity regex"));
+    re.replace_all(value, |captures: &regex::Captures| {
+        let raw = &captures[1];
+        let code = raw
+            .strip_prefix('x')
+            .or_else(|| raw.strip_prefix('X'))
+            .map(|hex| u32::from_str_radix(hex, 16))
+            .unwrap_or_else(|| raw.parse::<u32>());
+        code.ok()
+            .and_then(char::from_u32)
+            .map(|ch| ch.to_string())
+            .unwrap_or_else(|| captures[0].to_string())
+    })
+    .into_owned()
+}
+
+fn clean_optional_string(value: &str) -> Option<String> {
+    let text = collapse_whitespace(&decode_html_text(value));
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn markdown_text_to_html(value: &str) -> String {
+    let body = value
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|paragraph| !paragraph.is_empty())
+        .map(|paragraph| format!("<p>{}</p>", escape_html(paragraph).replace('\n', "<br/>")))
+        .collect::<String>();
+    format!(r#"<div id="js_content">{body}</div>"#)
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn short_hash(value: &str, len: usize) -> String {
+    archive::sha256_hex(value).chars().take(len).collect()
+}
+
+fn short_label(value: &str, len: usize) -> String {
+    value.chars().take(len).collect()
 }
 
 fn account_search_cache() -> &'static Mutex<HashMap<String, CachedAccountSearch>> {

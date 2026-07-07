@@ -327,11 +327,6 @@ function WorkspaceApp() {
       return
     }
 
-    if (!loggedIn) {
-      toast.wxmpError("请先扫码登录微信公众号", api.openLogin)
-      openWechatLogin()
-      return
-    }
     setFetchProgressEvents([])
     setAddAccountInitialQuery(initialQuery?.trim() ?? "")
     setAddAccountOpen(true)
@@ -411,6 +406,26 @@ function WorkspaceApp() {
     } finally {
       setAddingAccount(false)
     }
+  }
+
+  const importArticleLink = async (link: string) => {
+    const article = await api.importArticleLink(link)
+    const list = await api.listAccounts()
+    setAccounts(list)
+    setAccountOrder((currentOrder) =>
+      moveAccountOrderItemToFront(currentOrder, list, article.fakeid)
+    )
+    setArchivedFakeids((currentArchived) =>
+      currentArchived.filter((fakeid) => fakeid !== article.fakeid)
+    )
+    setActiveFakeid(article.fakeid)
+    setActiveAid(article.aid)
+    setActiveTab("reader")
+    setArticleRefreshKey((key) => key + 1)
+    setAddAccountOpen(false)
+    setAddAccountInitialQuery("")
+    toast.success(`已录入文章：${article.title}`)
+    void maybeAutoPush(article.fakeid)
   }
 
   const continuePendingFetch = (status: LicenseStatus) => {
@@ -639,6 +654,7 @@ function WorkspaceApp() {
         onSearch={api.searchAccounts}
         onLogin={openWechatLogin}
         onSubmit={addAccount}
+        onImportArticleLink={importArticleLink}
       />
       {licenseStatus && !licenseStatus.active ? (
         <ActivationWatermark
@@ -707,7 +723,8 @@ function errorMessage(error: unknown): string {
     message.includes("Command license_status not found") ||
     message.includes("Command activate_license not found") ||
     message.includes("Command sync_remote_license not found") ||
-    message.includes("Command auth_logout not found")
+    message.includes("Command auth_logout not found") ||
+    message.includes("Command import_article_link not found")
   ) {
     return "授权命令未加载。请完全退出当前 Tauri 应用后重新启动，Rust 后端会重新编译并注册授权命令。"
   }

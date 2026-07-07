@@ -147,6 +147,8 @@ export const api = {
     invoke<boolean>("cancel_fetch_account", { fakeid }),
   fetchArticleContent: (aid: string, force = false) =>
     invoke<ArticleDetail>("fetch_article_content", { aid, force }),
+  importArticleLink: (link: string) =>
+    invoke<ArticleDetail>("import_article_link", { link }),
 
   // GitHub archive integration -------------------------------------------
   githubOauthStart: () => invoke<GhDeviceCodeStart>("github_oauth_start"),

@@ -111,6 +111,7 @@ pub fn run() {
             commands::fetch_selected_account,
             commands::cancel_fetch_account,
             commands::fetch_article_content,
+            commands::import_article_link,
             commands::github_oauth_start,
             commands::github_oauth_poll,
             commands::github_oauth_status,

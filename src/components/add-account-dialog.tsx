@@ -5,6 +5,7 @@ import {
   CheckIcon,
   CheckCircle2Icon,
   CircleIcon,
+  LinkIcon,
   LoaderCircleIcon,
   PlusIcon,
   SearchIcon,
@@ -20,6 +21,7 @@ import { normalizeWechatImageUrl } from "@/lib/media"
 import { isWxmpAuthError } from "@/lib/toast"
 
 type Step = "search" | "fetch"
+type AddMode = "account" | "article"
 type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 
 interface Props {
@@ -36,6 +38,7 @@ interface Props {
     limit: number,
     withContent: boolean
   ) => void
+  onImportArticleLink: (link: string) => Promise<void>
 }
 
 export function AddAccountDialog({
@@ -48,6 +51,7 @@ export function AddAccountDialog({
   onSearch,
   onLogin,
   onSubmit,
+  onImportArticleLink,
 }: Props) {
   if (!open) return null
 
@@ -61,6 +65,7 @@ export function AddAccountDialog({
       onSearch={onSearch}
       onLogin={onLogin}
       onSubmit={onSubmit}
+      onImportArticleLink={onImportArticleLink}
     />
   )
 }
@@ -74,10 +79,19 @@ function AddAccountDialogContent({
   onSearch,
   onLogin,
   onSubmit,
+  onImportArticleLink,
 }: Omit<Props, "open">) {
   const normalizedInitialQuery = initialQuery?.trim() ?? ""
+  const [mode, setMode] = useState<AddMode>(
+    isWechatArticleInput(normalizedInitialQuery) ? "article" : "account"
+  )
   const [step, setStep] = useState<Step>("search")
   const [query, setQuery] = useState(normalizedInitialQuery)
+  const [articleLink, setArticleLink] = useState(
+    isWechatArticleInput(normalizedInitialQuery) ? normalizedInitialQuery : ""
+  )
+  const [articleError, setArticleError] = useState<string | null>(null)
+  const [importingArticle, setImportingArticle] = useState(false)
   const [searching, setSearching] = useState(false)
   const [searchedQuery, setSearchedQuery] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -88,13 +102,15 @@ function AddAccountDialogContent({
   const [initialSearchStarted, setInitialSearchStarted] = useState(false)
 
   const trimmedQuery = query.trim()
+  const trimmedArticleLink = articleLink.trim()
   const parsedLimit = Number.parseInt(limit, 10)
   const selectedAccount =
     searchResults.find((account) => account.fakeid === selectedFakeid) ?? null
   const hasCurrentResults =
     searchedQuery === trimmedQuery && searchResults.length > 0
-  const actionBusy = busy || searching
+  const actionBusy = busy || searching || importingArticle
   const canSearch = trimmedQuery.length > 0
+  const canImportArticle = trimmedArticleLink.length > 0
   const canConfirmSelection = Boolean(selectedAccount)
   const canFetch =
     Boolean(selectedAccount) && Number.isFinite(parsedLimit) && parsedLimit > 0
@@ -135,6 +151,20 @@ function AddAccountDialogContent({
     await searchAccountsFor(trimmedQuery)
   }
 
+  const submitArticleLink = async () => {
+    if (!canImportArticle || actionBusy) return
+
+    setImportingArticle(true)
+    setArticleError(null)
+    try {
+      await onImportArticleLink(trimmedArticleLink)
+    } catch (error) {
+      setArticleError(errorMessage(error))
+    } finally {
+      setImportingArticle(false)
+    }
+  }
+
   useEffect(() => {
     if (!normalizedInitialQuery || initialSearchStarted) return
 
@@ -167,6 +197,11 @@ function AddAccountDialogContent({
         onSubmit={(event) => {
           event.preventDefault()
 
+          if (mode === "article") {
+            void submitArticleLink()
+            return
+          }
+
           if (step === "search") {
             if (hasCurrentResults) {
               if (!canConfirmSelection) return
@@ -189,10 +224,14 @@ function AddAccountDialogContent({
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <div className="font-heading text-lg leading-none font-semibold">
-              新增公众号
+              新增内容
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {step === "search" ? "1 / 2 搜索公众号" : "2 / 2 抓取文章"}
+              {mode === "account"
+                ? step === "search"
+                  ? "1 / 2 搜索公众号"
+                  : "2 / 2 抓取文章"
+                : "文章链接"}
             </div>
           </div>
           <Button
@@ -207,7 +246,66 @@ function AddAccountDialogContent({
           </Button>
         </div>
 
-        {step === "search" ? (
+        <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          <button
+            type="button"
+            className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors ${
+              mode === "account"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            disabled={actionBusy}
+            onClick={() => {
+              setMode("account")
+              setArticleError(null)
+            }}
+          >
+            <SearchIcon className="size-4" />
+            公众号
+          </button>
+          <button
+            type="button"
+            className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors ${
+              mode === "article"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            disabled={actionBusy}
+            onClick={() => {
+              setMode("article")
+              setArticleError(null)
+            }}
+          >
+            <LinkIcon className="size-4" />
+            文章链接
+          </button>
+        </div>
+
+        {mode === "article" ? (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="article-link">微信公众号文章链接</Label>
+              <Input
+                id="article-link"
+                value={articleLink}
+                disabled={actionBusy}
+                autoFocus
+                placeholder="https://mp.weixin.qq.com/s/..."
+                onChange={(event) => {
+                  setArticleLink(event.target.value)
+                  setArticleError(null)
+                }}
+              />
+            </div>
+
+            {articleError ? (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
+                <span className="min-w-0 break-words">{articleError}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : step === "search" ? (
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="track-query">公众号名称</Label>
@@ -292,7 +390,7 @@ function AddAccountDialogContent({
         )}
 
         <div className="mt-5 flex items-center justify-between gap-2">
-          {step === "fetch" ? (
+          {mode === "account" && step === "fetch" ? (
             <Button
               type="button"
               variant="outline"
@@ -314,7 +412,16 @@ function AddAccountDialogContent({
             >
               取消
             </Button>
-            {step === "search" ? (
+            {mode === "article" ? (
+              <Button type="submit" disabled={!canImportArticle || actionBusy}>
+                {importingArticle ? (
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                ) : (
+                  <LinkIcon className="size-4" />
+                )}
+                抓取并录入
+              </Button>
+            ) : step === "search" ? (
               <Button
                 type="submit"
                 disabled={
@@ -664,6 +771,10 @@ function errorMessage(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function isWechatArticleInput(value: string) {
+  return /^https?:\/\/mp\.weixin\.qq\.com\//i.test(value.trim())
 }
 
 function fetchSteps(withContent: boolean) {
