@@ -68,6 +68,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   WechatCapabilityStatusFeedback,
   WechatCapabilitySettingsProvider,
   WechatCommercialAuthorizationSetting,
@@ -852,7 +857,7 @@ function AppSettingsWindow({
                         </div>
                         <div className="mt-0.5 truncate text-xs text-muted-foreground">
                           {authState === "expired"
-                            ? "Session 已失效，请重新扫码"
+                            ? "登录已失效，请重新扫码"
                             : loggedIn
                               ? (authAccount?.nickname ?? "账号信息同步中")
                               : "未配置"}
@@ -864,7 +869,7 @@ function AppSettingsWindow({
                         <div className="min-w-0">
                           <div className="font-semibold">登录已过期</div>
                           <div className="mt-0.5 text-xs">
-                            请重新扫码更新 Session 后继续抓取公众号内容。
+                            重新扫码后可继续抓取公众号内容。
                           </div>
                         </div>
                         <Button
@@ -902,75 +907,121 @@ function AppSettingsWindow({
                         ) : null}
                       </div>
                     ) : null}
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="mt-4 grid gap-3">
                       {!loggedIn ? (
-                        <Button type="button" onClick={onLogin}>
-                          <KeyRoundIcon className="size-3.5" />
-                          {authState === "expired"
-                            ? "重新扫码登录"
-                            : "配置账号"}
-                        </Button>
-                      ) : (
-                        <Fragment>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={openAddAccount}
-                          >
-                            <PlusIcon className="size-3.5" />
-                            添加公众号
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={onLogin}
-                          >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button type="button" onClick={onLogin}>
                             <KeyRoundIcon className="size-3.5" />
-                            重新扫码更新 Session
+                            {authState === "expired" ? "重新登录" : "扫码登录"}
                           </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            disabled={authState === "checking"}
-                            onClick={() => void onCheckWechatSession(true)}
-                          >
-                            <RotateCcwIcon
-                              className={`size-3.5 ${
-                                authState === "checking" ? "animate-spin" : ""
-                              }`}
-                            />
-                            立即检测
-                          </Button>
-                          {!confirmingWechatRemoval ? (
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              onClick={() => setConfirmingWechatRemoval(true)}
-                            >
-                              <Trash2Icon className="size-3.5" />
-                              移除账号
-                            </Button>
-                          ) : (
-                            <div className="flex flex-wrap gap-2">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
                               <Button
                                 type="button"
-                                variant="ghost"
-                                onClick={() =>
-                                  setConfirmingWechatRemoval(false)
-                                }
+                                variant="outline"
+                                size="icon"
+                                aria-label="检测登录状态"
+                                disabled={authState === "checking"}
+                                onClick={() => void onCheckWechatSession(true)}
                               >
-                                取消
+                                <RotateCcwIcon
+                                  className={`size-3.5 ${
+                                    authState === "checking"
+                                      ? "animate-spin"
+                                      : ""
+                                  }`}
+                                />
                               </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              检测当前微信登录是否仍可用
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              onClick={onLogin}
+                            >
+                              <KeyRoundIcon className="size-3.5" />
+                              更新登录
+                            </Button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  aria-label="检测登录状态"
+                                  disabled={authState === "checking"}
+                                  onClick={() =>
+                                    void onCheckWechatSession(true)
+                                  }
+                                >
+                                  <RotateCcwIcon
+                                    className={`size-3.5 ${
+                                      authState === "checking"
+                                        ? "animate-spin"
+                                        : ""
+                                    }`}
+                                  />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">
+                                检测当前微信登录是否仍可用
+                              </TooltipContent>
+                            </Tooltip>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={openAddAccount}
+                            >
+                              <PlusIcon className="size-3.5" />
+                              添加公众号
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                            <div className="text-xs text-muted-foreground">
+                              只移除本机保存的微信登录，不删除已采集内容。
+                            </div>
+                            {!confirmingWechatRemoval ? (
                               <Button
                                 type="button"
                                 variant="destructive"
-                                onClick={confirmWechatRemoval}
+                                size="sm"
+                                onClick={() =>
+                                  setConfirmingWechatRemoval(true)
+                                }
                               >
-                                确认移除
+                                <Trash2Icon className="size-3.5" />
+                                移除登录
                               </Button>
-                            </div>
-                          )}
-                        </Fragment>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setConfirmingWechatRemoval(false)
+                                  }
+                                >
+                                  取消
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={confirmWechatRemoval}
+                                >
+                                  确认移除
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="mt-4 grid gap-3">
