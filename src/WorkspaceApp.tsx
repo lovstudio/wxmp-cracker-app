@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from "react"
@@ -38,6 +39,7 @@ import { copyableToast as toast } from "@/lib/toast"
 const ACCOUNT_ORDER_STORAGE_KEY = "wxmp.accountOrder"
 const ARCHIVED_ACCOUNTS_STORAGE_KEY = "wxmp.archivedAccounts"
 const PINNED_ACCOUNTS_STORAGE_KEY = "wxmp.pinnedAccounts"
+const AUTH_STATUS_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const MAX_FETCH_PROGRESS_EVENTS = 36
 const WORKSPACE_ROUTE_TAB_PARAM = "tab"
 const WORKSPACE_ROUTE_ACCOUNT_PARAM = "account"
@@ -67,6 +69,12 @@ type PendingFetch = {
   account: AccountSearchResult
   limit: number
   withContent: boolean
+}
+
+type RefreshAuthOptions = {
+  notifyExpired?: boolean
+  toastOnError?: boolean
+  toastOnSuccess?: boolean
 }
 
 type WorkspaceRouteState = {
@@ -103,6 +111,9 @@ function WorkspaceApp() {
   const [loggedIn, setLoggedIn] = useState(false)
   const [authAccount, setAuthAccount] = useState<LoginAccount | null>(null)
   const [lastLoginAt, setLastLoginAt] = useState<number | null>(null)
+  const [authExpired, setAuthExpired] = useState(false)
+  const [authChecking, setAuthChecking] = useState(false)
+  const [lastAuthCheckAt, setLastAuthCheckAt] = useState<number | null>(null)
   const [addAccountOpen, setAddAccountOpen] = useState(false)
   const [addAccountInitialQuery, setAddAccountInitialQuery] = useState("")
   const [lovstudioAuthOpen, setLovstudioAuthOpen] = useState(false)
@@ -116,6 +127,8 @@ function WorkspaceApp() {
   >([])
   const [articleRefreshKey, setArticleRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialRoute.tab)
+  const authExpiredNotifiedRef = useRef(false)
+  const authRefreshInFlightRef = useRef(false)
   const orderedAccounts = useMemo(
     () => orderAccounts(accounts, accountOrder),
     [accounts, accountOrder]
@@ -184,18 +197,80 @@ function WorkspaceApp() {
     }
   }, [])
 
-  const refreshAuth = useCallback(async () => {
+  const refreshAuth = useCallback(async (options: RefreshAuthOptions = {}) => {
+    if (authRefreshInFlightRef.current) {
+      return null
+    }
+
+    authRefreshInFlightRef.current = true
+    setAuthChecking(true)
+
     try {
       const s = await api.authStatus()
-      setLoggedIn(s.logged_in)
-      setAuthAccount(s.account)
+      const checkedAt = s.checked_at ?? currentUnixTimestamp()
+      const expired = Boolean(s.expired)
+      const sessionActive = s.logged_in && !expired
+
+      setLoggedIn(sessionActive)
+      setAuthAccount(sessionActive ? s.account : null)
       setLastLoginAt(s.last_login_at)
-    } catch {
+      setAuthExpired(expired)
+      setLastAuthCheckAt(checkedAt)
+
+      if (expired) {
+        const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
+        if (options.notifyExpired || !authExpiredNotifiedRef.current) {
+          toast.wxmpError(message, api.openLogin, { duration: 20000 })
+          authExpiredNotifiedRef.current = true
+        }
+      } else {
+        authExpiredNotifiedRef.current = false
+        if (options.toastOnSuccess && sessionActive) {
+          if (s.message) {
+            toast.warning(s.message)
+          } else {
+            toast.success("微信公众号 Session 有效")
+          }
+        }
+      }
+
+      return s
+    } catch (error) {
       setLoggedIn(false)
       setAuthAccount(null)
       setLastLoginAt(null)
+      setAuthExpired(false)
+      setLastAuthCheckAt(currentUnixTimestamp())
+
+      if (options.toastOnError && isTauri()) {
+        toast.error(`校验公众号登录状态失败: ${errorMessage(error)}`)
+      }
+
+      return null
+    } finally {
+      authRefreshInFlightRef.current = false
+      setAuthChecking(false)
     }
   }, [])
+
+  const checkWechatSession = useCallback(
+    async (toastOnSuccess = false) => {
+      await refreshAuth({
+        notifyExpired: true,
+        toastOnError: true,
+        toastOnSuccess,
+      })
+    },
+    [refreshAuth]
+  )
+
+  const refreshAuthSilently = useCallback(async () => {
+    try {
+      await refreshAuth()
+    } catch {
+      // `refreshAuth` already normalizes state on failure.
+    }
+  }, [refreshAuth])
 
   const refreshLicenseStatus = useCallback(async () => {
     if (!isTauri()) {
@@ -232,12 +307,12 @@ function WorkspaceApp() {
   const logoutWechatAccount = useCallback(async () => {
     try {
       await api.authLogout()
-      await refreshAuth()
+      await refreshAuthSilently()
       toast.success("已移除公众号登录凭证")
     } catch (e) {
       toast.error(`移除公众号登录凭证失败: ${errorMessage(e)}`)
     }
-  }, [refreshAuth])
+  }, [refreshAuthSilently])
 
   useAutoUpdate()
 
@@ -249,12 +324,12 @@ function WorkspaceApp() {
   useEffect(() => {
     const initialRefreshTimer = window.setTimeout(() => {
       void refreshAccounts()
-      void refreshAuth()
+      void refreshAuthSilently()
       void refreshLicenseStatus()
     }, 0)
     const ok = onLoginSuccess(() => {
       toast.success("登录成功，已保存凭证")
-      refreshAuth()
+      refreshAuthSilently()
       refreshLicenseStatus()
     })
     const err = onLoginError((m) => {
@@ -271,7 +346,21 @@ function WorkspaceApp() {
       err.then((un) => un())
       progress.then((un) => un())
     }
-  }, [refreshAccounts, refreshAuth, refreshLicenseStatus])
+  }, [refreshAccounts, refreshAuthSilently, refreshLicenseStatus])
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return
+    }
+
+    const authStatusInterval = window.setInterval(() => {
+      void refreshAuth({ notifyExpired: true })
+    }, AUTH_STATUS_CHECK_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(authStatusInterval)
+    }
+  }, [refreshAuth])
 
   useEffect(() => {
     if (lovstudioAuthLoading) {
@@ -555,7 +644,11 @@ function WorkspaceApp() {
             loggedIn={loggedIn}
             authAccount={authAccount}
             lastLoginAt={lastLoginAt}
+            authExpired={authExpired}
+            authChecking={authChecking}
+            lastAuthCheckAt={lastAuthCheckAt}
             onAddAccount={openAddAccount}
+            onCheckWechatSession={checkWechatSession}
             onLovstudioLogin={() => setLovstudioAuthOpen(true)}
             onLovstudioLogout={() => void signOutLovstudio()}
             onLogin={openWechatLogin}
@@ -911,6 +1004,10 @@ function setWorkspaceRouteParam(
   } else {
     params.delete(key)
   }
+}
+
+function currentUnixTimestamp() {
+  return Math.floor(Date.now() / 1000)
 }
 
 function readStringList(key: string): string[] {

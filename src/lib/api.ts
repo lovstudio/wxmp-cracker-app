@@ -54,6 +54,9 @@ export interface AuthStatus {
   token: string | null
   account: LoginAccount | null
   last_login_at: number | null
+  expired: boolean
+  checked_at: number | null
+  message: string | null
 }
 
 export interface FetchAccountResult {

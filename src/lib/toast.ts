@@ -23,7 +23,11 @@ export const copyableToast = {
     showCopyableToast("warning", message, options),
 }
 
-function showCopyableToast(kind: ToastKind, message: string, options?: ExternalToast) {
+function showCopyableToast(
+  kind: ToastKind,
+  message: string,
+  options?: ExternalToast
+) {
   return sonnerToast[kind](message, {
     ...options,
     action: {
@@ -67,6 +71,8 @@ export function isWxmpAuthError(message: string) {
     message.includes("认证失败") ||
     message.includes("尚未登录") ||
     message.includes("请先扫码登录") ||
+    message.includes("登录已过期") ||
+    message.includes("重新扫码") ||
     normalized.includes("auth failed") ||
     normalized.includes("invalid session") ||
     normalized.includes("re-login needed") ||

@@ -556,6 +556,18 @@ input {
   );
 }
 
+.auth-status-badge[data-state="expired"] {
+  border-color: color-mix(in oklch, var(--destructive) 34%, var(--border));
+  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+  color: var(--destructive);
+}
+
+.auth-status-badge[data-state="checking"] {
+  border-color: color-mix(in oklch, var(--muted-foreground) 28%, var(--border));
+  background: color-mix(in oklch, var(--muted) 68%, transparent);
+  color: var(--muted-foreground);
+}
+
 .brand-mark-frame {
   border: 1px solid color-mix(in oklch, var(--primary) 34%, var(--border));
   background:

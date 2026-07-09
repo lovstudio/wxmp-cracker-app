@@ -92,10 +92,14 @@ interface Props {
   loggedIn: boolean
   authAccount: LoginAccount | null
   lastLoginAt: number | null
+  authExpired: boolean
+  authChecking: boolean
+  lastAuthCheckAt: number | null
   onLovstudioLogin: () => void
   onLovstudioLogout: () => void
   onSelect: (fakeid: string) => void
   onAddAccount: (query?: string) => void
+  onCheckWechatSession: (toastOnSuccess?: boolean) => void | Promise<void>
   onLogin: () => void
   onLogoutWechatAccount: () => void
   onReorder: (activeFakeid: string, overFakeid: string) => void
@@ -108,6 +112,7 @@ interface Props {
 }
 
 type SettingsPane = "account" | "connections" | "commercial" | "quota"
+type WechatAuthState = "online" | "offline" | "expired" | "checking"
 
 interface AccountMenuState {
   account: Account
@@ -143,10 +148,14 @@ export function AccountSidebar({
   loggedIn,
   authAccount,
   lastLoginAt,
+  authExpired,
+  authChecking,
+  lastAuthCheckAt,
   onLovstudioLogin,
   onLovstudioLogout,
   onSelect,
   onAddAccount,
+  onCheckWechatSession,
   onLogin,
   onLogoutWechatAccount,
   onReorder,
@@ -171,11 +180,19 @@ export function AccountSidebar({
       coordinateGetter: sortableKeyboardCoordinates,
     })
   )
-  const authAvatar = loggedIn ? (authAccount?.avatar ?? null) : null
+  const authState: WechatAuthState = authChecking
+    ? "checking"
+    : authExpired
+      ? "expired"
+      : loggedIn
+        ? "online"
+        : "offline"
+  const authAvatar =
+    authState === "online" ? (authAccount?.avatar ?? null) : null
   const authFallback = authAccount?.nickname?.[0] ?? "微"
   const authId = authAccount?.username || null
   const authAlias = authAccount?.alias || null
-  const authStatusLabel = loggedIn ? "扫码已登录" : "未扫码"
+  const authStatusLabel = wechatAuthStateLabel(authState)
   const lovstudioLoggedIn = Boolean(lovstudioUserId)
   const lovstudioName =
     lovstudioDisplayName ?? lovstudioEmail ?? "Lovstudio 账号"
@@ -421,13 +438,20 @@ export function AccountSidebar({
               <Settings2Icon className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">设置</span>
               <span
-                className={`size-1.5 shrink-0 rounded-full ${
-                  lovstudioLoggedIn ? "bg-emerald-500" : "bg-sidebar-border"
+                className="flex shrink-0 items-center gap-1"
+                aria-label={`微信公众号${authStatusLabel}，Lovstudio ${
+                  lovstudioLoggedIn ? "已登录" : "未登录"
                 }`}
-                aria-label={
-                  lovstudioLoggedIn ? "Lovstudio 已登录" : "Lovstudio 未登录"
-                }
-              />
+              >
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 rounded-full ${wechatSessionDotClass(authState)}`}
+                />
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 rounded-full ${lovstudioSessionDotClass(lovstudioLoggedIn)}`}
+                />
+              </span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-72">
@@ -483,8 +507,10 @@ export function AccountSidebar({
           authAvatar={authAvatar}
           authFallback={authFallback}
           authId={authId}
+          authState={authState}
           authStatusLabel={authStatusLabel}
           lastLoginAt={lastLoginAt}
+          lastAuthCheckAt={lastAuthCheckAt}
           loggedIn={loggedIn}
           lovstudioAvatarUrl={lovstudioAvatarUrl}
           lovstudioEmail={lovstudioEmail}
@@ -495,6 +521,7 @@ export function AccountSidebar({
           initialPane={settingsPane}
           onClose={() => setSettingsOpen(false)}
           onAddAccount={() => onAddAccount()}
+          onCheckWechatSession={onCheckWechatSession}
           onLogin={onLogin}
           onLogoutWechatAccount={onLogoutWechatAccount}
           onLovstudioLogin={onLovstudioLogin}
@@ -524,8 +551,10 @@ function AppSettingsWindow({
   authAvatar,
   authFallback,
   authId,
+  authState,
   authStatusLabel,
   lastLoginAt,
+  lastAuthCheckAt,
   loggedIn,
   lovstudioAvatarUrl,
   lovstudioEmail,
@@ -536,6 +565,7 @@ function AppSettingsWindow({
   initialPane,
   onClose,
   onAddAccount,
+  onCheckWechatSession,
   onLogin,
   onLogoutWechatAccount,
   onLovstudioLogin,
@@ -546,8 +576,10 @@ function AppSettingsWindow({
   authAvatar: string | null
   authFallback: string
   authId: string | null
+  authState: WechatAuthState
   authStatusLabel: string
   lastLoginAt: number | null
+  lastAuthCheckAt: number | null
   loggedIn: boolean
   lovstudioAvatarUrl: string | null
   lovstudioEmail: string | null
@@ -558,6 +590,7 @@ function AppSettingsWindow({
   initialPane: SettingsPane
   onClose: () => void
   onAddAccount: () => void
+  onCheckWechatSession: (toastOnSuccess?: boolean) => void | Promise<void>
   onLogin: () => void
   onLogoutWechatAccount: () => void
   onLovstudioLogin: () => void
@@ -582,6 +615,11 @@ function AppSettingsWindow({
     setConfirmingWechatRemoval(false)
     onLogoutWechatAccount()
   }
+
+  useEffect(() => {
+    if (activePane !== "connections") return
+    void onCheckWechatSession(false)
+  }, [activePane, onCheckWechatSession])
 
   return createPortal(
     <div
@@ -786,7 +824,13 @@ function AppSettingsWindow({
                       {authAvatar ? (
                         <Avatar src={authAvatar} fallback={authFallback} />
                       ) : (
-                        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        <div
+                          className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${
+                            authState === "expired"
+                              ? "bg-destructive/10 text-destructive"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
                           {loggedIn ? (
                             <CheckCircle2Icon className="size-4" />
                           ) : (
@@ -801,23 +845,47 @@ function AppSettingsWindow({
                           </div>
                           <span
                             className="auth-status-badge"
-                            data-state={loggedIn ? "online" : "offline"}
+                            data-state={authState}
                           >
                             {authStatusLabel}
                           </span>
                         </div>
                         <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {loggedIn
-                            ? (authAccount?.nickname ?? "账号信息同步中")
-                            : "未配置"}
+                          {authState === "expired"
+                            ? "Session 已失效，请重新扫码"
+                            : loggedIn
+                              ? (authAccount?.nickname ?? "账号信息同步中")
+                              : "未配置"}
                         </div>
                       </div>
                     </div>
+                    {authState === "expired" ? (
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                        <div className="min-w-0">
+                          <div className="font-semibold">登录已过期</div>
+                          <div className="mt-0.5 text-xs">
+                            请重新扫码更新 Session 后继续抓取公众号内容。
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={onLogin}
+                        >
+                          <KeyRoundIcon className="size-3.5" />
+                          重新扫码
+                        </Button>
+                      </div>
+                    ) : null}
                     {loggedIn ? (
                       <div className="mt-4 grid gap-2 rounded-lg bg-muted/55 p-3 text-xs text-muted-foreground">
                         <SettingsInfoRow
                           label="上次登录"
                           value={formatLastLogin(lastLoginAt)}
+                        />
+                        <SettingsInfoRow
+                          label="上次检测"
+                          value={formatLastLogin(lastAuthCheckAt)}
                         />
                         {authAlias ? (
                           <SettingsInfoRow label="别名" value={authAlias} />
@@ -838,7 +906,9 @@ function AppSettingsWindow({
                       {!loggedIn ? (
                         <Button type="button" onClick={onLogin}>
                           <KeyRoundIcon className="size-3.5" />
-                          配置账号
+                          {authState === "expired"
+                            ? "重新扫码登录"
+                            : "配置账号"}
                         </Button>
                       ) : (
                         <Fragment>
@@ -856,7 +926,20 @@ function AppSettingsWindow({
                             onClick={onLogin}
                           >
                             <KeyRoundIcon className="size-3.5" />
-                            切换账号
+                            重新扫码更新 Session
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={authState === "checking"}
+                            onClick={() => void onCheckWechatSession(true)}
+                          >
+                            <RotateCcwIcon
+                              className={`size-3.5 ${
+                                authState === "checking" ? "animate-spin" : ""
+                              }`}
+                            />
+                            立即检测
                           </Button>
                           {!confirmingWechatRemoval ? (
                             <Button
@@ -940,6 +1023,24 @@ function settingsPaneTitle(pane: SettingsPane) {
   if (pane === "connections") return "连接"
   if (pane === "commercial") return "公众号商业化"
   return "频率"
+}
+
+function wechatAuthStateLabel(state: WechatAuthState) {
+  if (state === "online") return "扫码已登录"
+  if (state === "expired") return "登录已过期"
+  if (state === "checking") return "检测中"
+  return "未扫码"
+}
+
+function wechatSessionDotClass(state: WechatAuthState) {
+  if (state === "online") return "bg-primary"
+  if (state === "expired") return "bg-destructive"
+  if (state === "checking") return "animate-pulse bg-muted-foreground"
+  return "bg-sidebar-border"
+}
+
+function lovstudioSessionDotClass(loggedIn: boolean) {
+  return loggedIn ? "bg-primary" : "bg-sidebar-border"
 }
 
 function SettingsInfoRow({ label, value }: { label: string; value: string }) {

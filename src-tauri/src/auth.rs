@@ -19,6 +19,9 @@ const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleW
 const LOGIN_COOKIE_CAPTURE_ATTEMPTS: usize = 20;
 const LOGIN_COOKIE_CAPTURE_DELAY_MS: u64 = 500;
 const REQUIRED_LOGIN_COOKIE: &str = "slave_sid";
+const SESSION_EXPIRED_ERROR: &str = "wechat session expired";
+const SESSION_EXPIRED_MESSAGE: &str = "微信公众号登录已过期，请重新扫码登录";
+const SESSION_UNCHECKED_MESSAGE: &str = "暂时无法校验微信公众号登录状态";
 
 type LoginCaptureState = Arc<Mutex<Option<String>>>;
 
@@ -28,9 +31,12 @@ pub struct LoginStatus {
     pub token: Option<String>,
     pub account: Option<LoginAccount>,
     pub last_login_at: Option<i64>,
+    pub expired: bool,
+    pub checked_at: Option<i64>,
+    pub message: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LoginAccount {
     pub nickname: Option<String>,
     pub username: Option<String>,
@@ -66,23 +72,70 @@ pub fn write_config(cfg: &WcxConfig) -> Result<()> {
 }
 
 pub async fn current_status() -> LoginStatus {
+    let checked_at = current_unix_timestamp();
+
     match read_config() {
         Some(mut c) => {
-            let logged_in = !c.token.is_empty();
+            let logged_in = !c.token.trim().is_empty() && !c.cookie.trim().is_empty();
             let mut should_write = false;
+
+            if !logged_in {
+                return LoginStatus {
+                    logged_in: false,
+                    token: None,
+                    account: None,
+                    last_login_at: c.last_login_at,
+                    expired: false,
+                    checked_at,
+                    message: None,
+                };
+            }
 
             if logged_in && c.last_login_at.is_none() {
                 c.last_login_at = config_modified_at();
                 should_write = c.last_login_at.is_some();
             }
 
-            if logged_in && c.account.is_none() {
-                match fetch_login_account(&c).await {
-                    Ok(account) => {
+            match fetch_login_account(&c).await {
+                Ok(account) => {
+                    if c.account.as_ref() != Some(&account) {
                         c.account = Some(account);
                         should_write = true;
                     }
-                    Err(e) => log::warn!("failed to fetch login account info: {e:?}"),
+                }
+                Err(e) if is_session_expired_error(&e) => {
+                    log::warn!("wechat login session expired: {e:#}");
+                    if let Err(remove_error) = remove_config_file() {
+                        log::warn!("failed to remove expired login config: {remove_error:?}");
+                    }
+                    return LoginStatus {
+                        logged_in: false,
+                        token: None,
+                        account: None,
+                        last_login_at: c.last_login_at,
+                        expired: true,
+                        checked_at,
+                        message: Some(SESSION_EXPIRED_MESSAGE.to_string()),
+                    };
+                }
+                Err(e) => {
+                    log::warn!("failed to validate login account info: {e:?}");
+
+                    if should_write {
+                        if let Err(write_error) = write_config(&c) {
+                            log::warn!("failed to cache login status info: {write_error:?}");
+                        }
+                    }
+
+                    return LoginStatus {
+                        logged_in: true,
+                        token: Some(c.token),
+                        account: c.account,
+                        last_login_at: c.last_login_at,
+                        expired: false,
+                        checked_at,
+                        message: Some(format!("{SESSION_UNCHECKED_MESSAGE}: {e:#}")),
+                    };
                 }
             }
 
@@ -97,6 +150,9 @@ pub async fn current_status() -> LoginStatus {
                 token: Some(c.token),
                 account: c.account,
                 last_login_at: c.last_login_at,
+                expired: false,
+                checked_at,
+                message: None,
             }
         }
         None => LoginStatus {
@@ -104,6 +160,9 @@ pub async fn current_status() -> LoginStatus {
             token: None,
             account: None,
             last_login_at: None,
+            expired: false,
+            checked_at,
+            message: None,
         },
     }
 }
@@ -167,6 +226,10 @@ pub fn logout(app: &AppHandle) -> Result<()> {
         let _ = existing.close();
     }
 
+    remove_config_file()
+}
+
+fn remove_config_file() -> Result<()> {
     let p = config_path()?;
     match fs::remove_file(&p) {
         Ok(()) => Ok(()),
@@ -342,21 +405,60 @@ async fn fetch_login_account(cfg: &WcxConfig) -> Result<LoginAccount> {
         "{LOGIN_URL}cgi-bin/home?t=home/index&lang=zh_CN&token={}",
         cfg.token
     );
-    let html = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(url)
         .header(USER_AGENT, USER_AGENT_VALUE)
         .header(REFERER, LOGIN_URL)
         .header(COOKIE, cfg.cookie.as_str())
         .send()
         .await
-        .context("fetch mp.weixin.qq.com home")?
+        .context("fetch mp.weixin.qq.com home")?;
+
+    let final_url = response.url().to_string();
+    let status = response.status();
+    if matches!(status.as_u16(), 401 | 403) {
+        return Err(anyhow!("{SESSION_EXPIRED_ERROR}: HTTP {status}"));
+    }
+
+    let html = response
         .error_for_status()
         .context("mp.weixin.qq.com home returned error status")?
         .text()
         .await
         .context("read mp.weixin.qq.com home html")?;
 
-    parse_login_account(&html).ok_or_else(|| anyhow!("login account fields not found"))
+    if let Some(account) = parse_login_account(&html) {
+        return Ok(account);
+    }
+
+    if looks_like_logged_out_response(&final_url, &html) {
+        return Err(anyhow!("{SESSION_EXPIRED_ERROR}: redirected to login page"));
+    }
+
+    Err(anyhow!("login account fields not found"))
+}
+
+fn is_session_expired_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains(SESSION_EXPIRED_ERROR))
+}
+
+fn looks_like_logged_out_response(final_url: &str, html: &str) -> bool {
+    let url = final_url.to_ascii_lowercase();
+    if url.contains("/cgi-bin/bizlogin")
+        || url.contains("/cgi-bin/loginpage")
+        || url.contains("action=login")
+    {
+        return true;
+    }
+
+    html.contains("扫码登录")
+        || html.contains("二维码登录")
+        || html.contains("登录超时")
+        || html.contains("重新登录")
+        || html.contains("login_frame")
+        || html.contains("wx_errcode=200003")
 }
 
 fn parse_login_account(html: &str) -> Option<LoginAccount> {
@@ -536,5 +638,21 @@ mod tests {
         assert!(is_allowed_login_url(&qq_url));
         assert!(!is_allowed_login_url(&external_url));
         assert!(!is_allowed_login_url(&fake_qq_url));
+    }
+
+    #[test]
+    fn logged_out_response_detects_login_page() {
+        assert!(looks_like_logged_out_response(
+            "https://mp.weixin.qq.com/cgi-bin/bizlogin?action=login",
+            "<html><body>扫码登录</body></html>",
+        ));
+    }
+
+    #[test]
+    fn logged_out_response_ignores_home_page_without_login_markers() {
+        assert!(!looks_like_logged_out_response(
+            "https://mp.weixin.qq.com/cgi-bin/home?t=home/index&lang=zh_CN&token=123",
+            "<script>var real_nick_name = '微探';</script>",
+        ));
     }
 }
