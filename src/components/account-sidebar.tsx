@@ -34,6 +34,7 @@ import {
   GripVerticalIcon,
   HandshakeIcon,
   KeyRoundIcon,
+  Loader2Icon,
   LogOutIcon,
   MoreHorizontalIcon,
   PinIcon,
@@ -42,6 +43,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   Settings2Icon,
+  ShieldCheckIcon,
   Trash2Icon,
   UserRoundIcon,
   XIcon,
@@ -919,18 +921,14 @@ function AppSettingsWindow({
                               <Button
                                 type="button"
                                 variant="outline"
-                                size="icon"
                                 aria-label="检测登录状态"
                                 disabled={authState === "checking"}
                                 onClick={() => void onCheckWechatSession(true)}
                               >
-                                <RotateCcwIcon
-                                  className={`size-3.5 ${
-                                    authState === "checking"
-                                      ? "animate-spin"
-                                      : ""
-                                  }`}
+                                <WechatSessionCheckIcon
+                                  checking={authState === "checking"}
                                 />
+                                检测状态
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom">
@@ -941,10 +939,7 @@ function AppSettingsWindow({
                       ) : (
                         <div className="grid gap-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                              type="button"
-                              onClick={onLogin}
-                            >
+                            <Button type="button" onClick={onLogin}>
                               <KeyRoundIcon className="size-3.5" />
                               更新登录
                             </Button>
@@ -953,20 +948,16 @@ function AppSettingsWindow({
                                 <Button
                                   type="button"
                                   variant="outline"
-                                  size="icon"
                                   aria-label="检测登录状态"
                                   disabled={authState === "checking"}
                                   onClick={() =>
                                     void onCheckWechatSession(true)
                                   }
                                 >
-                                  <RotateCcwIcon
-                                    className={`size-3.5 ${
-                                      authState === "checking"
-                                        ? "animate-spin"
-                                        : ""
-                                    }`}
+                                  <WechatSessionCheckIcon
+                                    checking={authState === "checking"}
                                   />
+                                  检测状态
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="bottom">
@@ -991,9 +982,7 @@ function AppSettingsWindow({
                                 type="button"
                                 variant="destructive"
                                 size="sm"
-                                onClick={() =>
-                                  setConfirmingWechatRemoval(true)
-                                }
+                                onClick={() => setConfirmingWechatRemoval(true)}
                               >
                                 <Trash2Icon className="size-3.5" />
                                 移除登录
@@ -1092,6 +1081,14 @@ function wechatSessionDotClass(state: WechatAuthState) {
 
 function lovstudioSessionDotClass(loggedIn: boolean) {
   return loggedIn ? "bg-primary" : "bg-sidebar-border"
+}
+
+function WechatSessionCheckIcon({ checking }: { checking: boolean }) {
+  return checking ? (
+    <Loader2Icon className="size-3.5 animate-spin" />
+  ) : (
+    <ShieldCheckIcon className="size-3.5" />
+  )
 }
 
 function SettingsInfoRow({ label, value }: { label: string; value: string }) {
