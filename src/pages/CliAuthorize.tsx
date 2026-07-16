@@ -17,37 +17,34 @@ import { supabase } from "@/integrations/supabase/client"
 type Phase = "loading" | "need-login" | "ready" | "claimed"
 
 type DeviceCodeRow = {
-  device_code: string
   user_code: string
   client_name: string | null
   scope: string | null
   expires_at: string
-  user_id?: string | null
-  consumed_at?: string | null
+  approved: boolean
 }
 
-type DeviceCodeSelectResult = {
-  data: DeviceCodeRow | null
+type DeviceCodeLookupResult = {
+  data: DeviceCodeRow[] | null
   error: { message: string } | null
 }
 
-type DeviceCodeUpdateResult = {
+type DeviceCodeApproveResult = {
+  data: boolean | null
   error: { message: string } | null
-}
-
-type DeviceCodeTable = {
-  select: (columns: string) => {
-    eq: (column: string, value: string) => {
-      maybeSingle: () => Promise<DeviceCodeSelectResult>
-    }
-  }
-  update: (values: Record<string, string>) => {
-    eq: (column: string, value: string) => Promise<DeviceCodeUpdateResult>
-  }
 }
 
 const lovstudioData = supabase as unknown as {
-  from: (table: "cli_device_codes") => DeviceCodeTable
+  rpc: {
+    (
+      fn: "lookup_cli_device_code",
+      args: { p_user_code: string }
+    ): Promise<DeviceCodeLookupResult>
+    (
+      fn: "approve_cli_device_code",
+      args: { p_user_code: string }
+    ): Promise<DeviceCodeApproveResult>
+  }
 }
 
 export function CliAuthorize() {
@@ -79,40 +76,24 @@ export function CliAuthorize() {
     setError(null)
     setDeviceRow(null)
 
-    const { data, error: selectError } = await lovstudioData
-      .from("cli_device_codes")
-      .select(
-        "device_code, user_code, client_name, scope, expires_at, user_id, consumed_at"
-      )
-      .eq("user_code", normalized)
-      .maybeSingle()
+    const { data, error: selectError } = await lovstudioData.rpc(
+      "lookup_cli_device_code",
+      { p_user_code: normalized }
+    )
 
     if (selectError) {
       setError(`查询失败：${selectError.message}`)
       return
     }
 
-    if (!data) {
+    const row = data?.[0]
+
+    if (!row) {
       setError("授权码不存在或已过期。")
       return
     }
 
-    if (data.user_id && data.user_id !== user?.id) {
-      setError("这个授权码已被其他账号使用。")
-      return
-    }
-
-    if (data.consumed_at) {
-      setError("这个授权码已经完成登录，请在微探里重新发起登录。")
-      return
-    }
-
-    if (new Date(data.expires_at) < new Date()) {
-      setError("授权码已过期，请在微探里重新发起登录。")
-      return
-    }
-
-    setDeviceRow(data)
+    setDeviceRow(row)
   }
 
   const approve = async () => {
@@ -121,15 +102,19 @@ export function CliAuthorize() {
     setClaiming(true)
     setError(null)
 
-    const { error: updateError } = await lovstudioData
-      .from("cli_device_codes")
-      .update({ user_id: user.id, approved_at: new Date().toISOString() })
-      .eq("device_code", deviceRow.device_code)
+    const { data: approved, error: updateError } = await lovstudioData.rpc(
+      "approve_cli_device_code",
+      { p_user_code: deviceRow.user_code }
+    )
 
     setClaiming(false)
 
-    if (updateError) {
-      setError(`授权失败：${updateError.message}`)
+    if (updateError || !approved) {
+      setError(
+        updateError
+          ? `授权失败：${updateError.message}`
+          : "授权失败，授权码已过期或已被使用。"
+      )
       return
     }
 
