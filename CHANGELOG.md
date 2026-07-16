@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.2 - 2026-07-16
+
+### Added
+
+- Added direct WeChat article-link imports without requiring an account selection first.
+- Added proactive WeChat session validity checks, expired-session detection, and guided re-login recovery actions.
+
+### Changed
+
+- Refined account session controls with explicit status checks and clearer update/remove action hierarchy.
+
+### Fixed
+
+- Restored Lovstudio desktop authorization after device-code table permissions were hardened by switching the browser flow to secured RPC endpoints.
+
 ## 0.3.1 - 2026-07-02
 
 ### Added
