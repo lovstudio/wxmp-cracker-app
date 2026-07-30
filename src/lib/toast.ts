@@ -1,3 +1,4 @@
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { toast as sonnerToast, type ExternalToast } from "sonner"
 
 type ToastKind = "success" | "error" | "info" | "warning"
@@ -82,11 +83,19 @@ export function isWxmpAuthError(message: string) {
 
 export async function copyText(text: string) {
   try {
+    await writeClipboardText(text)
+    sonnerToast.success("已复制")
+    return true
+  } catch {
+    // Browser preview has no Tauri plugin, so keep the web clipboard path.
+  }
+
+  try {
     await navigator.clipboard.writeText(text)
     sonnerToast.success("已复制")
     return true
   } catch {
-    // Tauri/WebKit may reject Clipboard API outside a focused secure context.
+    // Clipboard API may reject writes outside a focused secure context.
   }
 
   const textarea = document.createElement("textarea")
@@ -99,7 +108,10 @@ export async function copyText(text: string) {
   textarea.select()
 
   try {
-    document.execCommand("copy")
+    const copied = document.execCommand("copy")
+    if (!copied) {
+      throw new Error("document.execCommand returned false")
+    }
     sonnerToast.success("已复制")
     return true
   } catch {
