@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AccountSearchResult, FetchAccountProgress } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import { isWxmpAuthError } from "@/lib/toast"
+import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/toast"
 
 type Step = "search" | "fetch"
 type AddMode = "account" | "article"
@@ -384,6 +384,7 @@ function AddAccountDialogContent({
                 events={progressEvents}
                 limit={Math.min(Math.max(parsedLimit || 1, 1), 500)}
                 withContent={withContent}
+                onVerify={onLogin}
               />
             ) : null}
           </div>
@@ -441,7 +442,11 @@ function AddAccountDialogContent({
             ) : (
               <Button type="submit" disabled={!canFetch || busy}>
                 {!busy ? <PlusIcon className="size-4" /> : null}
-                {busy ? "抓取中" : "开始抓取"}
+                {busy
+                  ? "抓取中"
+                  : hasRateLimitError(progressEvents)
+                    ? "检查是否恢复"
+                    : "开始抓取"}
               </Button>
             )}
           </div>
@@ -479,17 +484,18 @@ function SearchResults({
 
   if (error) {
     const isAuthError = isWxmpAuthError(error)
+    const isRateLimitError = isWxmpRateLimitError(error)
     return (
       <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
         <span className="min-w-0 break-words">{error}</span>
-        {isAuthError ? (
+        {isAuthError || isRateLimitError ? (
           <Button
             type="button"
             size="sm"
             className="h-7 shrink-0"
             onClick={onLogin}
           >
-            重新登录
+            {isRateLimitError ? "账号验证" : "重新登录"}
           </Button>
         ) : null}
       </div>
@@ -525,11 +531,13 @@ function FetchProcess({
   events,
   limit,
   withContent,
+  onVerify,
 }: {
   account: AccountSearchResult
   events: FetchAccountProgress[]
   limit: number
   withContent: boolean
+  onVerify: () => void
 }) {
   const fallbackEvent: FetchAccountProgress = {
     fakeid: account.fakeid,
@@ -548,6 +556,7 @@ function FetchProcess({
   const steps = fetchSteps(withContent)
   const currentStepIndex = activeFetchStepIndex(steps, visibleEvents)
   const currentStep = steps[currentStepIndex] ?? steps[0]
+  const rateLimited = isWxmpRateLimitError(latest.message)
   const progressEvent =
     [...visibleEvents]
       .reverse()
@@ -566,8 +575,9 @@ function FetchProcess({
           100
         )
       : 0
-  const headline =
-    latest.status === "error"
+  const headline = rateLimited
+    ? "微信接口已暂停"
+    : latest.status === "error"
       ? "抓取中断"
       : latest.status === "warning"
         ? "部分内容需要重试"
@@ -583,7 +593,13 @@ function FetchProcess({
     >
       <div className="min-w-0">
         <div className="text-sm font-medium">{headline}</div>
-        <div className="mt-1 truncate text-xs text-muted-foreground">
+        <div
+          className={`mt-1 text-xs text-muted-foreground ${
+            latest.status === "error" || latest.status === "warning"
+              ? "leading-5 break-words"
+              : "truncate"
+          }`}
+        >
           {latest.message}
         </div>
         {latest.title ? (
@@ -610,9 +626,11 @@ function FetchProcess({
             <li
               key={step.label}
               className={`flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 ${
-                isCurrent
-                  ? "border-primary/40 bg-primary/10"
-                  : "border-border/50 bg-background/45"
+                state === "error"
+                  ? "border-destructive/40 bg-destructive/10"
+                  : isCurrent
+                    ? "border-primary/40 bg-primary/10"
+                    : "border-border/50 bg-background/45"
               }`}
               aria-current={isCurrent ? "step" : undefined}
             >
@@ -635,6 +653,23 @@ function FetchProcess({
           )
         })}
       </ol>
+
+      {rateLimited ? (
+        <div className="mt-3 flex flex-col gap-3 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs leading-5 text-muted-foreground">
+            为保护公众号，本机在冷却结束前不会继续请求微信。若后台要求密码验证，请先完成验证，再检查是否恢复。
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={onVerify}
+          >
+            账号验证
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -800,6 +835,12 @@ function fetchSteps(withContent: boolean) {
       : []),
     { label: "完成", stages: ["complete"], completedBy: "complete" },
   ]
+}
+
+function hasRateLimitError(events: FetchAccountProgress[]) {
+  return events.some(
+    (event) => event.status === "error" && isWxmpRateLimitError(event.message)
+  )
 }
 
 type FetchStep = ReturnType<typeof fetchSteps>[number]

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added a persistent, cross-process request guard for authenticated WeChat searches and article pagination, including an automatic cooldown after `ret=200013`.
+- Added guided account verification actions and clear cooldown messaging when WeChat pauses access.
+
+### Changed
+
+- Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
+
+### Fixed
+
+- Routed account search through the same protected wcx request path as article fetching instead of bypassing the sidecar frequency control.
+
 ## 0.3.2 - 2026-07-16
 
 ### Added

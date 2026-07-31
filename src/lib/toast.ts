@@ -16,8 +16,10 @@ export const copyableToast = {
     options?: ToastOptionsWithoutActions
   ) =>
     isWxmpAuthError(message)
-      ? showWxmpAuthErrorToast(message, onLogin, options)
-      : showCopyableToast("error", message, options),
+      ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
+      : isWxmpRateLimitError(message)
+        ? showWxmpRecoveryToast(message, onLogin, "账号验证", options)
+        : showCopyableToast("error", message, options),
   info: (message: string, options?: ExternalToast) =>
     showCopyableToast("info", message, options),
   warning: (message: string, options?: ExternalToast) =>
@@ -40,9 +42,10 @@ function showCopyableToast(
   })
 }
 
-function showWxmpAuthErrorToast(
+function showWxmpRecoveryToast(
   message: string,
   onLogin: ToastActionHandler,
+  actionLabel: string,
   options?: ToastOptionsWithoutActions
 ) {
   return sonnerToast.error(message, {
@@ -55,7 +58,7 @@ function showWxmpAuthErrorToast(
       },
     },
     action: {
-      label: "重新登录",
+      label: actionLabel,
       onClick: () => {
         void Promise.resolve(onLogin()).catch((error) => {
           showCopyableToast("error", errorMessage(error))
@@ -78,6 +81,20 @@ export function isWxmpAuthError(message: string) {
     normalized.includes("invalid session") ||
     normalized.includes("re-login needed") ||
     normalized.includes("ret=200003")
+  )
+}
+
+export function isWxmpRateLimitError(message: string) {
+  const normalized = message.toLowerCase()
+
+  return (
+    message.includes("触发风控") ||
+    message.includes("频率保护") ||
+    message.includes("保护冷却") ||
+    message.includes("暂停微信公众号接口请求") ||
+    normalized.includes("ret=200013") ||
+    normalized.includes("rate limited") ||
+    normalized.includes("ratelimit")
   )
 }
 

@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -95,9 +95,7 @@ const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
 const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
 const ACCOUNT_SEARCH_CACHE_MAX_ITEMS: usize = 64;
 const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
-const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(12);
 const WECHAT_ARTICLE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_MAX_BYTES: u64 = 12 * 1024 * 1024;
@@ -120,42 +118,11 @@ struct CachedAccountSearch {
     results: Vec<AccountSearchResult>,
 }
 
-#[derive(Deserialize)]
-struct WechatSearchResponse {
-    #[serde(default)]
-    base_resp: Option<WechatBaseResponse>,
-    #[serde(default)]
-    list: Vec<WechatSearchAccount>,
-}
-
-#[derive(Deserialize)]
-struct WechatBaseResponse {
-    #[serde(default)]
-    ret: i64,
-    #[serde(default)]
-    err_msg: String,
-}
-
-#[derive(Deserialize)]
-struct WechatSearchAccount {
-    #[serde(default)]
-    fakeid: String,
-    #[serde(default)]
-    nickname: String,
-    #[serde(default)]
-    alias: Option<String>,
-    #[serde(default)]
-    signature: Option<String>,
-    #[serde(default)]
-    round_head_img: Option<String>,
-}
-
 static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess>>> =
     OnceLock::new();
 static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
     OnceLock::new();
-static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_ARTICLE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
@@ -357,14 +324,10 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
             return Ok(results);
         }
 
-        let results = match search_accounts_direct(&query) {
-            Ok(results) => results,
-            Err(error) if is_terminal_wechat_search_error(&error.message) => return Err(error),
-            Err(error) => {
-                log::warn!("direct WeChat account search failed; falling back to wcx: {error}");
-                search_accounts_via_wcx(&query)?
-            }
-        };
+        // Search and article pagination must pass through the same persistent
+        // wcx request guard. A direct Rust request here used to bypass the
+        // sidecar delay and could hit WeChat immediately before a fetch.
+        let results = search_accounts_via_wcx(&query)?;
 
         remember_account_search(cache_key, &results);
         Ok(results)
@@ -373,82 +336,6 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
     .map_err(|e| CmdError {
         message: format!("公众号搜索任务失败: {e}"),
     })?
-}
-
-fn search_accounts_direct(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
-    let config = auth::read_config().ok_or_else(|| CmdError {
-        message: "尚未登录，请先扫码登录".to_string(),
-    })?;
-    let token = config.token.trim();
-    let cookie = config.cookie.trim();
-    if token.is_empty() || cookie.is_empty() {
-        return Err(CmdError {
-            message: "尚未登录，请先扫码登录".to_string(),
-        });
-    }
-
-    let url = format!(
-        "{WECHAT_SEARCH_BIZ_URL}?action=search_biz&begin=0&count=5&query={}&token={}&lang=zh_CN&f=json&ajax=1",
-        urlencoding::encode(query),
-        urlencoding::encode(token),
-    );
-
-    let response = wechat_search_client()?
-        .get(url)
-        .header(COOKIE, cookie)
-        .send()
-        .map_err(|error| CmdError {
-            message: format!("微信搜索请求失败: {error}"),
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        return Err(CmdError {
-            message: format!("微信搜索 HTTP {status}: {}", truncate_for_error(&body, 200)),
-        });
-    }
-
-    let payload = response
-        .json::<WechatSearchResponse>()
-        .map_err(|error| CmdError {
-            message: format!("解析微信搜索结果失败: {error}"),
-        })?;
-    let ret = payload.base_resp.as_ref().map(|resp| resp.ret).unwrap_or(0);
-    if ret != 0 {
-        let message = payload
-            .base_resp
-            .as_ref()
-            .map(|resp| resp.err_msg.trim())
-            .filter(|message| !message.is_empty())
-            .unwrap_or("unknown");
-        if ret == 200013 {
-            return Err(CmdError {
-                message: format!("触发风控：Rate limited (ret=200013): {message}. Wait >= 1 hour."),
-            });
-        }
-        if matches!(ret, 200003 | 200002 | 200008) {
-            return Err(CmdError {
-                message: format!("认证失败：Auth failed (ret={ret}): {message}. Re-login needed."),
-            });
-        }
-        return Err(CmdError {
-            message: format!("微信搜索 API error ret={ret}: {message}"),
-        });
-    }
-
-    Ok(payload
-        .list
-        .into_iter()
-        .map(|account| AccountSearchResult {
-            fakeid: account.fakeid,
-            nickname: account.nickname,
-            alias: account.alias,
-            signature: account.signature,
-            avatar: account.round_head_img,
-        })
-        .filter(|account| !account.fakeid.is_empty() && !account.nickname.is_empty())
-        .collect())
 }
 
 fn search_accounts_via_wcx(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
@@ -483,27 +370,6 @@ fn search_accounts_via_wcx(query: &str) -> Result<Vec<AccountSearchResult>, CmdE
     serde_json::from_str::<Vec<AccountSearchResult>>(payload).map_err(|e| CmdError {
         message: format!("解析 wcx search 结果失败: {e}"),
     })
-}
-
-fn wechat_search_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
-    WECHAT_SEARCH_CLIENT
-        .get_or_init(build_wechat_search_client)
-        .as_ref()
-        .map_err(|message| CmdError {
-            message: message.clone(),
-        })
-}
-
-fn build_wechat_search_client() -> Result<reqwest::blocking::Client, String> {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(WECHAT_USER_AGENT));
-    headers.insert(REFERER, HeaderValue::from_static(WECHAT_REFERER_URL));
-
-    reqwest::blocking::Client::builder()
-        .default_headers(headers)
-        .timeout(WECHAT_DIRECT_SEARCH_TIMEOUT)
-        .build()
-        .map_err(|error| format!("初始化微信搜索客户端失败: {error}"))
 }
 
 fn wechat_image_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
@@ -649,12 +515,6 @@ fn image_content_type_hint(url: &str) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn is_terminal_wechat_search_error(message: &str) -> bool {
-    message.starts_with("尚未登录")
-        || message.starts_with("认证失败")
-        || message.starts_with("触发风控")
 }
 
 fn truncate_for_error(value: &str, max_chars: usize) -> String {
@@ -1761,6 +1621,7 @@ fn run_fetch_progress_command(
     });
 
     let mut stdout_text = String::new();
+    let mut last_progress: Option<FetchAccountProgress> = None;
     for line in BufReader::new(stdout).lines() {
         let line = match line {
             Ok(line) => line,
@@ -1776,7 +1637,10 @@ fn run_fetch_progress_command(
 
         if let Some(payload) = line.strip_prefix(FETCH_PROGRESS_PREFIX) {
             match serde_json::from_str::<FetchAccountProgress>(payload.trim()) {
-                Ok(progress) => emit_fetch_progress(app, progress),
+                Ok(progress) => {
+                    last_progress = Some(progress.clone());
+                    emit_fetch_progress(app, progress);
+                }
                 Err(e) => log::warn!("invalid fetch progress payload: {e}"),
             }
         }
@@ -1802,10 +1666,19 @@ fn run_fetch_progress_command(
         let detail = first_nonempty_line(&stderr_text)
             .or_else(|| first_nonempty_line(&stdout_text))
             .unwrap_or_else(|| format!("wcx 精确抓取退出码: {status}"));
-        emit_fetch_progress(
-            app,
-            fetch_progress(account, "error", "error", &detail, None, None, None),
-        );
+        let error_progress = match last_progress {
+            Some(last) => fetch_progress(
+                account,
+                &last.stage,
+                "error",
+                &detail,
+                last.current,
+                last.total,
+                last.title,
+            ),
+            None => fetch_progress(account, "error", "error", &detail, None, None, None),
+        };
+        emit_fetch_progress(app, error_progress);
         return Err(CmdError { message: detail });
     }
 
