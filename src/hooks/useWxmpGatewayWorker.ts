@@ -14,7 +14,6 @@ import {
   type ClaimedGatewayRequest,
 } from "@/lib/gateway"
 import { isTauri } from "@/lib/tauri"
-import { isWxmpArticleListUnavailableError } from "@/lib/wxmp-errors"
 import type { Json } from "@/integrations/supabase/types"
 
 const WORKER_POLL_MS = 12_000
@@ -273,9 +272,6 @@ function positiveInt(value: Json | undefined, fallback: number, max: number) {
 }
 
 function classifyGatewayError(message: string) {
-  if (isWxmpArticleListUnavailableError(message)) {
-    return "source_unavailable"
-  }
   if (message.includes("触发风控") || message.includes("RateLimit")) {
     return "rate_limited"
   }

@@ -7,9 +7,9 @@ import {
   CircleIcon,
   LinkIcon,
   LoaderCircleIcon,
-  PauseCircleIcon,
   PlusIcon,
   SearchIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -19,16 +19,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AccountSearchResult, FetchAccountProgress } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import {
-  isWxmpArticleListUnavailableError,
-  isWxmpAuthError,
-  isWxmpRateLimitError,
-} from "@/lib/toast"
-import {
-  WXMP_ARTICLE_LIST_PAUSED,
-  WXMP_ARTICLE_LIST_PAUSED_DESCRIPTION,
-  WXMP_ARTICLE_LIST_PAUSED_TITLE,
-} from "@/lib/wxmp-availability"
+import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/toast"
+import { WXMP_BATCH_FETCH_GUARD_DESCRIPTION } from "@/lib/wxmp-availability"
 
 type Step = "search" | "fetch"
 type AddMode = "account" | "article"
@@ -93,9 +85,7 @@ function AddAccountDialogContent({
 }: Omit<Props, "open">) {
   const normalizedInitialQuery = initialQuery?.trim() ?? ""
   const [mode, setMode] = useState<AddMode>(
-    isWechatArticleInput(normalizedInitialQuery) || !normalizedInitialQuery
-      ? "article"
-      : "account"
+    isWechatArticleInput(normalizedInitialQuery) ? "article" : "account"
   )
   const [step, setStep] = useState<Step>("search")
   const [query, setQuery] = useState(normalizedInitialQuery)
@@ -121,16 +111,12 @@ function AddAccountDialogContent({
   const hasCurrentResults =
     searchedQuery === trimmedQuery && searchResults.length > 0
   const actionBusy = busy || searching || importingArticle
-  const articleListUnavailable = hasArticleListUnavailableError(progressEvents)
   const rateLimited = hasRateLimitError(progressEvents)
-  const canSearch = !WXMP_ARTICLE_LIST_PAUSED && trimmedQuery.length > 0
+  const canSearch = trimmedQuery.length > 0
   const canImportArticle = trimmedArticleLink.length > 0
   const canConfirmSelection = Boolean(selectedAccount)
   const canFetch =
-    !WXMP_ARTICLE_LIST_PAUSED &&
-    Boolean(selectedAccount) &&
-    Number.isFinite(parsedLimit) &&
-    parsedLimit > 0
+    Boolean(selectedAccount) && Number.isFinite(parsedLimit) && parsedLimit > 0
 
   const switchToArticleImport = () => {
     setMode("article")
@@ -147,8 +133,7 @@ function AddAccountDialogContent({
   const searchAccountsFor = useCallback(
     async (searchQuery: string) => {
       const normalizedQuery = searchQuery.trim()
-      if (WXMP_ARTICLE_LIST_PAUSED || !normalizedQuery || busy || searching)
-        return
+      if (!normalizedQuery || busy || searching) return
 
       setSearching(true)
       setSearchError(null)
@@ -189,12 +174,7 @@ function AddAccountDialogContent({
   }
 
   useEffect(() => {
-    if (
-      WXMP_ARTICLE_LIST_PAUSED ||
-      !normalizedInitialQuery ||
-      initialSearchStarted
-    )
-      return
+    if (!normalizedInitialQuery || initialSearchStarted) return
 
     setInitialSearchStarted(true)
     void searchAccountsFor(normalizedInitialQuery)
@@ -256,11 +236,9 @@ function AddAccountDialogContent({
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {mode === "account"
-                ? WXMP_ARTICLE_LIST_PAUSED
-                  ? "公众号批量抓取暂停"
-                  : step === "search"
-                    ? "1 / 2 搜索公众号"
-                    : "2 / 2 抓取文章"
+                ? step === "search"
+                  ? "1 / 2 搜索公众号"
+                  : "2 / 2 抓取文章"
                 : "文章链接"}
             </div>
           </div>
@@ -292,11 +270,6 @@ function AddAccountDialogContent({
           >
             <SearchIcon className="size-4" />
             公众号
-            {WXMP_ARTICLE_LIST_PAUSED ? (
-              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                暂停
-              </span>
-            ) : null}
           </button>
           <button
             type="button"
@@ -340,8 +313,6 @@ function AddAccountDialogContent({
               </div>
             ) : null}
           </div>
-        ) : WXMP_ARTICLE_LIST_PAUSED ? (
-          <ArticleListPausedPanel />
         ) : step === "search" ? (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -416,6 +387,11 @@ function AddAccountDialogContent({
               </label>
             </div>
 
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+              <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>{WXMP_BATCH_FETCH_GUARD_DESCRIPTION}</span>
+            </div>
+
             {selectedAccount && (busy || progressEvents.length > 0) ? (
               <FetchProcess
                 account={selectedAccount}
@@ -428,9 +404,7 @@ function AddAccountDialogContent({
         )}
 
         <div className="mt-5 flex items-center justify-between gap-2">
-          {mode === "account" &&
-          step === "fetch" &&
-          !WXMP_ARTICLE_LIST_PAUSED ? (
+          {mode === "account" && step === "fetch" ? (
             <Button
               type="button"
               variant="outline"
@@ -461,15 +435,6 @@ function AddAccountDialogContent({
                 )}
                 抓取并录入
               </Button>
-            ) : WXMP_ARTICLE_LIST_PAUSED || articleListUnavailable ? (
-              <Button
-                type="button"
-                disabled={actionBusy}
-                onClick={switchToArticleImport}
-              >
-                <LinkIcon className="size-4" />
-                使用文章链接
-              </Button>
             ) : step === "search" ? (
               <Button
                 type="submit"
@@ -489,7 +454,7 @@ function AddAccountDialogContent({
               </Button>
             ) : rateLimited ? (
               <Button type="button" disabled={actionBusy} onClick={onLogin}>
-                账号验证
+                完成验证后重新登录
               </Button>
             ) : (
               <Button type="submit" disabled={!canFetch || busy}>
@@ -534,24 +499,18 @@ function SearchResults({
 
   if (error) {
     const isAuthError = isWxmpAuthError(error)
-    const isArticleListUnavailable = isWxmpArticleListUnavailableError(error)
-    const isRateLimitError =
-      !isArticleListUnavailable && isWxmpRateLimitError(error)
+    const isRateLimitError = isWxmpRateLimitError(error)
     return (
       <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
         <span className="min-w-0 break-words">{error}</span>
-        {isArticleListUnavailable || isAuthError || isRateLimitError ? (
+        {isAuthError || isRateLimitError ? (
           <Button
             type="button"
             size="sm"
             className="h-7 shrink-0"
-            onClick={isArticleListUnavailable ? onImportArticle : onLogin}
+            onClick={isAuthError ? onLogin : onImportArticle}
           >
-            {isArticleListUnavailable
-              ? "文章链接"
-              : isRateLimitError
-                ? "账号验证"
-                : "重新登录"}
+            {isAuthError ? "重新登录" : "文章链接"}
           </Button>
         ) : null}
       </div>
@@ -610,11 +569,7 @@ function FetchProcess({
   const steps = fetchSteps(withContent)
   const currentStepIndex = activeFetchStepIndex(steps, visibleEvents)
   const currentStep = steps[currentStepIndex] ?? steps[0]
-  const articleListUnavailable = isWxmpArticleListUnavailableError(
-    latest.message
-  )
-  const rateLimited =
-    !articleListUnavailable && isWxmpRateLimitError(latest.message)
+  const rateLimited = isWxmpRateLimitError(latest.message)
   const progressEvent =
     [...visibleEvents]
       .reverse()
@@ -633,17 +588,15 @@ function FetchProcess({
           100
         )
       : 0
-  const headline = articleListUnavailable
-    ? "文章列表来源已变化"
-    : rateLimited
-      ? "微信接口已暂停"
-      : latest.status === "error"
-        ? "抓取中断"
-        : latest.status === "warning"
-          ? "部分内容需要重试"
-          : latest.stage === "complete" && latest.status === "done"
-            ? "抓取完成"
-            : currentStep.label
+  const headline = rateLimited
+    ? "本次抓取已停止"
+    : latest.status === "error"
+      ? "抓取中断"
+      : latest.status === "warning"
+        ? "部分内容需要重试"
+        : latest.stage === "complete" && latest.status === "done"
+          ? "抓取完成"
+          : currentStep.label
 
   return (
     <div
@@ -714,14 +667,12 @@ function FetchProcess({
         })}
       </ol>
 
-      {articleListUnavailable || rateLimited ? (
+      {rateLimited ? (
         <div className="mt-3 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5">
           <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
-            <PauseCircleIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
             <span>
-              {articleListUnavailable
-                ? "应用已停止继续请求文章列表。已缓存内容不受影响；如已知文章地址，可直接切换到文章链接导入。"
-                : "本机已进入请求冷却。若微信后台要求密码验证，请完成验证；应用不会自动重试文章列表。"}
+              当前登录会话已进入一小时保护冷却，完成内容已经保留。若微信后台出现验证，请先处理，再重新登录应用；期间也可以使用文章链接录入。
             </span>
           </div>
         </div>
@@ -873,29 +824,6 @@ function isWechatArticleInput(value: string) {
   return /^https?:\/\/mp\.weixin\.qq\.com\//i.test(value.trim())
 }
 
-function ArticleListPausedPanel() {
-  return (
-    <div className="rounded-xl border border-primary/30 bg-primary/10 p-4">
-      <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-background/70 text-primary">
-          <PauseCircleIcon className="size-5" />
-        </div>
-        <div className="min-w-0">
-          <div className="font-heading text-base font-semibold text-foreground">
-            {WXMP_ARTICLE_LIST_PAUSED_TITLE}
-          </div>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            {WXMP_ARTICLE_LIST_PAUSED_DESCRIPTION}
-          </p>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            如果你已经有文章地址，请切换到“文章链接”，应用会直接抓取并录入该文章。
-          </p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function fetchSteps(withContent: boolean) {
   return [
     {
@@ -918,18 +846,7 @@ function fetchSteps(withContent: boolean) {
 
 function hasRateLimitError(events: FetchAccountProgress[]) {
   return events.some(
-    (event) =>
-      event.status === "error" &&
-      !isWxmpArticleListUnavailableError(event.message) &&
-      isWxmpRateLimitError(event.message)
-  )
-}
-
-function hasArticleListUnavailableError(events: FetchAccountProgress[]) {
-  return events.some(
-    (event) =>
-      event.status === "error" &&
-      isWxmpArticleListUnavailableError(event.message)
+    (event) => event.status === "error" && isWxmpRateLimitError(event.message)
   )
 }
 

@@ -14,7 +14,6 @@ import {
   HistoryIcon,
   LinkIcon,
   LoaderCircleIcon,
-  PauseCircleIcon,
   PlayCircleIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -46,7 +45,6 @@ import {
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
-import { WXMP_ARTICLE_LIST_PAUSED } from "@/lib/wxmp-availability"
 import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface Props {
@@ -286,12 +284,8 @@ export function ArticleList({
   const collectionBusy = Boolean(fetchingAid) || resuming
   const canRunCollectionAction =
     Boolean(selectedAccount) && !loading && !collectionBusy
-  const canResume =
-    !WXMP_ARTICLE_LIST_PAUSED &&
-    canRunCollectionAction &&
-    items.length < MAX_RESUME_LIMIT
-  const canAudit =
-    !WXMP_ARTICLE_LIST_PAUSED && canRunCollectionAction && items.length > 0
+  const canResume = canRunCollectionAction && items.length < MAX_RESUME_LIMIT
+  const canAudit = canRunCollectionAction && items.length > 0
 
   const cachedCount = useMemo(
     () => items.filter((item) => item.has_content).length,
@@ -795,12 +789,6 @@ export function ArticleList({
             全文检索失败，已退回标题/摘要搜索
           </div>
         )}
-        {WXMP_ARTICLE_LIST_PAUSED && fakeid ? (
-          <div className="mt-2 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-            <PauseCircleIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
-            <span>文章列表续抓已暂停；本地检索、正文抓取和归档仍可使用。</span>
-          </div>
-        ) : null}
       </div>
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         {showCollectionBoundaries && items.length > 0 && (
@@ -842,46 +830,42 @@ export function ArticleList({
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {items.length === 0
-                ? WXMP_ARTICLE_LIST_PAUSED
-                  ? "可从“新增内容”使用文章链接导入"
-                  : "当前公众号还没有本地记录"
+                ? "当前公众号还没有本地记录"
                 : "换个关键词试试"}
             </div>
-            {items.length === 0 &&
-              !trimmedQuery &&
-              !WXMP_ARTICLE_LIST_PAUSED && (
-                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                  <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span>本次</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={MAX_RESUME_LIMIT}
-                      value={resumeBatchInput}
-                      disabled={resuming}
-                      onChange={(event) =>
-                        setResumeBatchInput(event.target.value)
-                      }
-                      className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
-                      aria-label="本次抓取篇数"
-                    />
-                    <span>篇</span>
-                  </label>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!canResume}
-                    onClick={() => void resumeCollection("forward")}
-                  >
-                    {resuming && resumeMode === "forward" ? (
-                      <LoaderCircleIcon className="size-3.5 animate-spin" />
-                    ) : (
-                      <PlayCircleIcon className="size-3.5" />
-                    )}
-                    抓取首批 {resumeBatchSize} 篇
-                  </Button>
-                </div>
-              )}
+            {items.length === 0 && !trimmedQuery && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span>本次</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={MAX_RESUME_LIMIT}
+                    value={resumeBatchInput}
+                    disabled={resuming}
+                    onChange={(event) =>
+                      setResumeBatchInput(event.target.value)
+                    }
+                    className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
+                    aria-label="本次抓取篇数"
+                  />
+                  <span>篇</span>
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!canResume}
+                  onClick={() => void resumeCollection("forward")}
+                >
+                  {resuming && resumeMode === "forward" ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <PlayCircleIcon className="size-3.5" />
+                  )}
+                  抓取首批 {resumeBatchSize} 篇
+                </Button>
+              </div>
+            )}
           </div>
         )}
         {filtered.map((a) => {

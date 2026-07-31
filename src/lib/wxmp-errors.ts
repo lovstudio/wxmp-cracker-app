@@ -14,18 +14,6 @@ export function isWxmpAuthError(message: string) {
   )
 }
 
-export function isWxmpArticleListUnavailableError(message: string) {
-  const normalized = message.toLowerCase()
-
-  return (
-    message.includes("文章列表来源暂停") ||
-    message.includes("文章列表来源近期发生变化") ||
-    message.includes("文章列表来源，批量抓取已暂停") ||
-    message.includes("文章列表请求当前处于暂停状态") ||
-    normalized.includes("article list unavailable")
-  )
-}
-
 export function isWxmpRateLimitError(message: string) {
   const normalized = message.toLowerCase()
 

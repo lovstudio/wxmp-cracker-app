@@ -1,6 +1,5 @@
 import { supabase } from "@/integrations/supabase/client"
 import type { Database, Json } from "@/integrations/supabase/types"
-import { isWxmpArticleListUnavailableError } from "@/lib/wxmp-errors"
 
 export type GatewayRequestKind = "self" | "commercial"
 export type EnqueuedGatewayRequest =
@@ -279,9 +278,6 @@ async function safeCompleteGatewayRequest(input: {
 }
 
 function classifyProviderError(message: string) {
-  if (isWxmpArticleListUnavailableError(message)) {
-    return "source_unavailable"
-  }
   if (message.includes("触发风控") || message.includes("RateLimit")) {
     return "rate_limited"
   }

@@ -1,16 +1,8 @@
 import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { toast as sonnerToast, type ExternalToast } from "sonner"
-import {
-  isWxmpArticleListUnavailableError,
-  isWxmpAuthError,
-  isWxmpRateLimitError,
-} from "@/lib/wxmp-errors"
+import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/wxmp-errors"
 
-export {
-  isWxmpArticleListUnavailableError,
-  isWxmpAuthError,
-  isWxmpRateLimitError,
-} from "@/lib/wxmp-errors"
+export { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/wxmp-errors"
 
 type ToastKind = "success" | "error" | "info" | "warning"
 type ToastActionHandler = () => unknown | Promise<unknown>
@@ -26,13 +18,11 @@ export const copyableToast = {
     onLogin: ToastActionHandler,
     options?: ToastOptionsWithoutActions
   ) =>
-    isWxmpArticleListUnavailableError(message)
-      ? showCopyableToast("warning", message, options)
-      : isWxmpAuthError(message)
+    isWxmpAuthError(message)
+      ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
+      : isWxmpRateLimitError(message)
         ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
-        : isWxmpRateLimitError(message)
-          ? showWxmpRecoveryToast(message, onLogin, "账号验证", options)
-          : showCopyableToast("error", message, options),
+        : showCopyableToast("error", message, options),
   info: (message: string, options?: ExternalToast) =>
     showCopyableToast("info", message, options),
   warning: (message: string, options?: ExternalToast) =>
