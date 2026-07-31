@@ -6,6 +6,7 @@ import {
   ExternalLinkIcon,
   FileX2Icon,
   LoaderCircleIcon,
+  PauseCircleIcon,
   PenLineIcon,
   PlayCircleIcon,
   TrendingUpIcon,
@@ -30,6 +31,10 @@ import {
 import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyableToast as toast } from "@/lib/toast"
+import {
+  WXMP_ARTICLE_LIST_PAUSED,
+  WXMP_ARTICLE_LIST_PAUSED_DESCRIPTION,
+} from "@/lib/wxmp-availability"
 import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface AccountWorkspaceProps {
@@ -103,7 +108,11 @@ function CollectionManager({
   const cachedCount = articles.filter((article) => article.has_content).length
   const nextResumeLimit = Math.min(Math.max(articles.length + 20, 20), 500)
   const collectionBusy = Boolean(fetchingAid) || resuming
-  const canResume = !loading && !collectionBusy && articles.length < 500
+  const canResume =
+    !WXMP_ARTICLE_LIST_PAUSED &&
+    !loading &&
+    !collectionBusy &&
+    articles.length < 500
 
   const fetchContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
@@ -179,6 +188,20 @@ function CollectionManager({
           value={formatPercent(cachedCount, articles.length)}
         />
       </div>
+      {WXMP_ARTICLE_LIST_PAUSED ? (
+        <div className="flex items-start gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3">
+          <PauseCircleIcon className="mt-0.5 size-5 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <div className="font-heading text-sm font-semibold">
+              公众号列表续采已暂停
+            </div>
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">
+              {WXMP_ARTICLE_LIST_PAUSED_DESCRIPTION}
+              已有索引仍可逐篇抓取正文、检索和导出。
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="workspace-panel overflow-hidden">
         <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
           <div className="min-w-0">
@@ -186,7 +209,9 @@ function CollectionManager({
             <div className="mt-1 text-xs text-muted-foreground">
               {loading
                 ? "正在读取本地索引"
-                : `当前 ${articles.length} 篇，续采目标 ${nextResumeLimit} 篇`}
+                : WXMP_ARTICLE_LIST_PAUSED
+                  ? `当前保留 ${articles.length} 篇本地索引`
+                  : `当前 ${articles.length} 篇，续采目标 ${nextResumeLimit} 篇`}
             </div>
           </div>
           <Button
@@ -198,10 +223,16 @@ function CollectionManager({
           >
             {resuming ? (
               <LoaderCircleIcon className="size-3.5 animate-spin" />
+            ) : WXMP_ARTICLE_LIST_PAUSED ? (
+              <PauseCircleIcon className="size-3.5" />
             ) : (
               <PlayCircleIcon className="size-3.5" />
             )}
-            {resuming ? "续采中" : "一键续采"}
+            {resuming
+              ? "续采中"
+              : WXMP_ARTICLE_LIST_PAUSED
+                ? "列表来源暂停"
+                : "一键续采"}
           </Button>
         </div>
         <Table>

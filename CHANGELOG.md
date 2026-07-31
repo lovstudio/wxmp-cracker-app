@@ -6,14 +6,18 @@
 
 - Added a persistent, cross-process request guard for authenticated WeChat searches and article pagination, including an automatic cooldown after `ret=200013`.
 - Added guided account verification actions and clear cooldown messaging when WeChat pauses access.
+- Added a dedicated article-list source status so upstream list failures are no longer presented as ordinary account frequency limits.
 
 ### Changed
 
 - Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
+- Paused the affected authenticated article-list path by default and made direct article-link import the primary add-content flow.
+- Existing cached articles remain available for search, body fetching, analysis, and export while list collection is paused.
 
 ### Fixed
 
 - Routed account search through the same protected wcx request path as article fetching instead of bypassing the sidecar frequency control.
+- Removed retry-oriented actions for article-list failures, preventing repeated checks from adding account risk.
 
 ## 0.3.2 - 2026-07-16
 
