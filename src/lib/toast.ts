@@ -2,7 +2,11 @@ import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-ma
 import { toast as sonnerToast, type ExternalToast } from "sonner"
 import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/wxmp-errors"
 
-export { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/wxmp-errors"
+export {
+  isWxmpAuthError,
+  isWxmpLocalCooldownError,
+  isWxmpRateLimitError,
+} from "@/lib/wxmp-errors"
 
 type ToastKind = "success" | "error" | "info" | "warning"
 type ToastActionHandler = () => unknown | Promise<unknown>

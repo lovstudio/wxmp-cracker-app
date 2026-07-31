@@ -27,3 +27,7 @@ export function isWxmpRateLimitError(message: string) {
     normalized.includes("ratelimit")
   )
 }
+
+export function isWxmpLocalCooldownError(message: string) {
+  return message.includes("本地保护") || message.includes("本次请求未发往微信")
+}

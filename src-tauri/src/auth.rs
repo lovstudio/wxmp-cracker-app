@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs, io,
     sync::{Arc, Mutex},
@@ -15,7 +17,9 @@ use crate::db::config_path;
 
 const LOGIN_URL: &str = "https://mp.weixin.qq.com/";
 const LOGIN_LABEL: &str = "wxmp-login";
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+// Keep this aligned with wcx.fetcher.BROWSER_PROFILE. Cookies captured under
+// one browser identity and reused under another are an avoidable risk signal.
+const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const LOGIN_COOKIE_CAPTURE_ATTEMPTS: usize = 20;
 const LOGIN_COOKIE_CAPTURE_DELAY_MS: u64 = 500;
 const REQUIRED_LOGIN_COOKIE: &str = "slave_sid";
@@ -68,6 +72,12 @@ pub fn write_config(cfg: &WcxConfig) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(cfg)?;
     fs::write(&p, json).context("write wcx config.json")?;
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&p)?.permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&p, permissions).context("protect wcx config.json")?;
+    }
     Ok(())
 }
 
@@ -654,5 +664,10 @@ mod tests {
             "https://mp.weixin.qq.com/cgi-bin/home?t=home/index&lang=zh_CN&token=123",
             "<script>var real_nick_name = '微探';</script>",
         ));
+    }
+
+    #[test]
+    fn login_browser_identity_matches_wcx_profile() {
+        assert!(USER_AGENT_VALUE.contains("Chrome/124.0.0.0"));
     }
 }

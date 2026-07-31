@@ -272,7 +272,11 @@ function positiveInt(value: Json | undefined, fallback: number, max: number) {
 }
 
 function classifyGatewayError(message: string) {
-  if (message.includes("触发风控") || message.includes("RateLimit")) {
+  if (
+    message.includes("触发风控") ||
+    message.includes("本地保护") ||
+    message.includes("RateLimit")
+  ) {
     return "rate_limited"
   }
   if (

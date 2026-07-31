@@ -12,12 +12,15 @@
 
 - Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
 - Restored account batch collection with current backend parameters and at least 15 seconds between authenticated requests.
+- Standardized article-list requests to the Official Account backend's 20-record page shape, then applies the requested N limit locally.
+- Aligned the login webview and wcx request browser identity so captured cookies are reused with the same Chrome profile.
 - Article bodies now download serially with a randomized 3–7 second interval; direct article-link import remains available as a fallback.
 
 ### Fixed
 
 - Routed account search through the same protected wcx request path as article fetching instead of bypassing the sidecar frequency control.
-- A verified or re-logged-in cookie now receives a fresh request guard even when WeChat keeps the same numeric token.
+- An explicit re-login now receives a fresh request guard even when WeChat keeps the same token and cookie values.
+- Local cooldowns and fresh `ret=200013` responses are now labeled separately, so the UI no longer presents a blocked local request as a new WeChat response.
 
 ## 0.3.2 - 2026-07-16
 

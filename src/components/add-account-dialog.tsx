@@ -19,7 +19,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AccountSearchResult, FetchAccountProgress } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/toast"
+import {
+  isWxmpAuthError,
+  isWxmpLocalCooldownError,
+  isWxmpRateLimitError,
+} from "@/lib/toast"
 import { WXMP_BATCH_FETCH_GUARD_DESCRIPTION } from "@/lib/wxmp-availability"
 
 type Step = "search" | "fetch"
@@ -569,6 +573,7 @@ function FetchProcess({
   const steps = fetchSteps(withContent)
   const currentStepIndex = activeFetchStepIndex(steps, visibleEvents)
   const currentStep = steps[currentStepIndex] ?? steps[0]
+  const localCooldown = isWxmpLocalCooldownError(latest.message)
   const rateLimited = isWxmpRateLimitError(latest.message)
   const progressEvent =
     [...visibleEvents]
@@ -588,15 +593,17 @@ function FetchProcess({
           100
         )
       : 0
-  const headline = rateLimited
-    ? "本次抓取已停止"
-    : latest.status === "error"
-      ? "抓取中断"
-      : latest.status === "warning"
-        ? "部分内容需要重试"
-        : latest.stage === "complete" && latest.status === "done"
-          ? "抓取完成"
-          : currentStep.label
+  const headline = localCooldown
+    ? "本地保护冷却中"
+    : rateLimited
+      ? "微信文章列表接口限流"
+      : latest.status === "error"
+        ? "抓取中断"
+        : latest.status === "warning"
+          ? "部分内容需要重试"
+          : latest.stage === "complete" && latest.status === "done"
+            ? "抓取完成"
+            : currentStep.label
 
   return (
     <div
@@ -672,7 +679,9 @@ function FetchProcess({
           <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
             <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
             <span>
-              当前登录会话已进入一小时保护冷却，完成内容已经保留。若微信后台出现验证，请先处理，再重新登录应用；期间也可以使用文章链接录入。
+              {localCooldown
+                ? "这是上一次微信返回 200013 后记录的本地冷却；本次没有再请求微信。重新扫码成功后会创建新会话，再尝试一次标准列表请求。"
+                : "微信文章列表接口刚返回 ret=200013；这不等于公众号后台账号异常。已完成内容会保留，应用会停止当前批次，避免继续叠加请求。"}
             </span>
           </div>
         </div>
