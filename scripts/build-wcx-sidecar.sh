@@ -97,6 +97,7 @@ PYINSTALLER_ARGS=(
   --hidden-import wcx.cache
   --hidden-import wcx.config
   --hidden-import wcx.fetcher
+  --hidden-import wcx.public_index
   --hidden-import wcx.exporters
   --hidden-import wcx.cli
   --collect-all curl_cffi

@@ -4,9 +4,10 @@ use reqwest::header::{
     HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    env,
+    env, fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -15,7 +16,7 @@ use std::{
         Arc, Mutex, OnceLock,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter};
 
@@ -427,7 +428,48 @@ fn search_accounts_direct(query: &str) -> Result<Vec<AccountSearchResult>, CmdEr
         .map_err(|error| CmdError {
             message: format!("解析微信公众号搜索结果失败: {error}"),
         })?;
-    search_results_from_response(payload)
+    let results = search_results_from_response(payload)?;
+    if let Err(error) = record_wechat_search_pace(&config) {
+        log::warn!("failed to record shared WeChat request pace: {error:#}");
+    }
+    Ok(results)
+}
+
+fn record_wechat_search_pace(config: &auth::WcxConfig) -> anyhow::Result<()> {
+    let base = dirs::data_dir().ok_or_else(|| anyhow::anyhow!("no data dir"))?;
+    let path = base.join("wcx").join("request-guard.db");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let connection = rusqlite::Connection::open(path)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS request_guard (
+             guard_key TEXT PRIMARY KEY,
+             next_allowed_at REAL NOT NULL DEFAULT 0,
+             cooldown_until REAL NOT NULL DEFAULT 0
+         );",
+    )?;
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64();
+    let key = wechat_pace_guard_key(config);
+    connection.execute(
+        "INSERT INTO request_guard (guard_key, next_allowed_at, cooldown_until)
+         VALUES (?1, ?2, 0)
+         ON CONFLICT(guard_key) DO UPDATE SET
+           next_allowed_at = MAX(request_guard.next_allowed_at, excluded.next_allowed_at)",
+        rusqlite::params![key, now + 15.0],
+    )?;
+    Ok(())
+}
+
+fn wechat_pace_guard_key(config: &auth::WcxConfig) -> String {
+    let session_marker = config
+        .last_login_at
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let fingerprint = format!("{}\n{}\n{}", config.token, config.cookie, session_marker);
+    let digest = Sha256::digest(fingerprint.as_bytes());
+    format!("wechat-session:{}:pace", &hex::encode(digest)[..20])
 }
 
 fn search_results_from_response(
@@ -2155,5 +2197,20 @@ mod tests {
 
         assert!(error.message.contains("ret=200013"));
         assert!(error.message.contains("这不代表登录账号异常"));
+    }
+
+    #[test]
+    fn direct_search_uses_the_same_pace_key_as_wcx() {
+        let config = auth::WcxConfig {
+            token: "token".to_string(),
+            cookie: "cookie".to_string(),
+            account: None,
+            last_login_at: Some(123),
+        };
+
+        assert_eq!(
+            wechat_pace_guard_key(&config),
+            "wechat-session:dd4a9375d43c1ed01c42:pace"
+        );
     }
 }
