@@ -97,8 +97,6 @@ const FETCH_ACCOUNT_PROGRESS_EVENT: &str = "fetch-account://progress";
 const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
 const FETCH_DAEMON_READY_PREFIX: &str = "__WXMP_FETCH_DAEMON_READY__";
 const FETCH_DAEMON_RESULT_PREFIX: &str = "__WXMP_FETCH_DAEMON_RESULT__";
-const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
-const ACCOUNT_SEARCH_CACHE_MAX_ITEMS: usize = 64;
 const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
 const WECHAT_ORIGIN_URL: &str = "https://mp.weixin.qq.com";
 const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
@@ -132,12 +130,6 @@ struct WcxDaemonResult {
     status: String,
     #[serde(default)]
     error: String,
-}
-
-#[derive(Clone)]
-struct CachedAccountSearch {
-    created_at: Instant,
-    results: Vec<AccountSearchResult>,
 }
 
 #[derive(Deserialize)]
@@ -174,8 +166,6 @@ static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess
     OnceLock::new();
 static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static WCX_DAEMON: OnceLock<Mutex<Option<WcxDaemon>>> = OnceLock::new();
-static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
-    OnceLock::new();
 static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_ARTICLE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
@@ -396,23 +386,7 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
         });
     }
 
-    let cache_key = account_search_cache_key(&query);
-    if let Some(results) = cached_account_search(&cache_key) {
-        log::info!(
-            "wechat account search cache hit: query_chars={}, results={}",
-            query.chars().count(),
-            results.len()
-        );
-        persist_existing_account_search_metadata(&results);
-        return Ok(results);
-    }
-
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(results) = cached_account_search(&cache_key) {
-            persist_existing_account_search_metadata(&results);
-            return Ok(results);
-        }
-
         let started_at = Instant::now();
         let results = search_accounts_direct(&query)?;
         log::info!(
@@ -423,7 +397,6 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
         );
 
         persist_existing_account_search_metadata(&results);
-        remember_account_search(cache_key, &results);
         Ok(results)
     })
     .await
@@ -1636,58 +1609,6 @@ fn short_hash(value: &str, len: usize) -> String {
 
 fn short_label(value: &str, len: usize) -> String {
     value.chars().take(len).collect()
-}
-
-fn account_search_cache() -> &'static Mutex<HashMap<String, CachedAccountSearch>> {
-    ACCOUNT_SEARCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn account_search_cache_key(query: &str) -> String {
-    query.trim().to_lowercase()
-}
-
-fn cached_account_search(key: &str) -> Option<Vec<AccountSearchResult>> {
-    let mut cache = account_search_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    let Some(entry) = cache.get(key) else {
-        return None;
-    };
-
-    if entry.created_at.elapsed() <= ACCOUNT_SEARCH_CACHE_TTL {
-        return Some(entry.results.clone());
-    }
-
-    cache.remove(key);
-    None
-}
-
-fn remember_account_search(key: String, results: &[AccountSearchResult]) {
-    let mut cache = account_search_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let now = Instant::now();
-
-    cache.retain(|_, entry| now.duration_since(entry.created_at) <= ACCOUNT_SEARCH_CACHE_TTL);
-
-    if cache.len() >= ACCOUNT_SEARCH_CACHE_MAX_ITEMS {
-        if let Some(oldest_key) = cache
-            .iter()
-            .min_by_key(|(_, entry)| entry.created_at)
-            .map(|(cache_key, _)| cache_key.clone())
-        {
-            cache.remove(&oldest_key);
-        }
-    }
-
-    cache.insert(
-        key,
-        CachedAccountSearch {
-            created_at: now,
-            results: results.to_vec(),
-        },
-    );
 }
 
 fn locate_wcx() -> Result<PathBuf, String> {
