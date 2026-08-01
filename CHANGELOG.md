@@ -10,6 +10,7 @@
 
 ### Changed
 
+- All desktop wcx operations now share the engine prewarmed at app startup; batch collection, lazy article bodies, direct-link imports, and gateway requests no longer relaunch the frozen sidecar.
 - Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
 - Interactive account search now uses a pre-initialized in-process client with a five-minute cache instead of starting the frozen wcx sidecar for every click.
 - The currently logged-in Official Account now reads its own backend publish history directly; cross-account collection remains isolated on its separate source.
