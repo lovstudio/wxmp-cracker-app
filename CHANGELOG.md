@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.5 - 2026-08-01
+## 0.3.6 - 2026-08-01
 
 ### Added
 
@@ -24,6 +24,7 @@
 
 - Restored Windows and Linux release builds after the Tauri 2.11 menu API update.
 - Made Windows release packaging resolve the branded executable name before archiving it.
+- Generated the cross-platform updater manifest after all platform assets finish uploading.
 - Account avatar refreshes now backfill missing images from the logged-in profile or search results, while sparse imports and collection updates preserve previously stored profile metadata.
 - Removed the sidecar cold start and article-batch pacing delay from interactive account search, and reduced its loading UI to one progress indicator.
 - Kept account search isolated from article-list pagination so an interactive lookup does not inherit the batch fetch cooldown.
