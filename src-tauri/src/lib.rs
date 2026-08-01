@@ -82,7 +82,7 @@ fn build_application_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri
 
     #[cfg(not(target_os = "macos"))]
     if let Some(MenuItemKind::Submenu(file_menu)) = menu.items()?.into_iter().find(|item| {
-        matches!(item, MenuItemKind::Submenu(submenu) if submenu.text().as_deref() == Ok("File"))
+        matches!(item, MenuItemKind::Submenu(submenu) if matches!(submenu.text().as_deref(), Ok("File")))
     }) {
         let insert_at = file_menu.items()?.len().saturating_sub(1);
         let separator = PredefinedMenuItem::separator(app)?;
