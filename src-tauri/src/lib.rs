@@ -1,4 +1,10 @@
-use tauri::{image::Image, tray::TrayIconBuilder, webview::PageLoadEvent};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder},
+    tray::TrayIconBuilder,
+    webview::PageLoadEvent,
+    Manager,
+};
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
 
@@ -11,6 +17,8 @@ mod license;
 mod sync;
 
 const LOGIN_WINDOW_LABEL: &str = "wxmp-login";
+const RELOAD_MENU_ITEM_ID: &str = "reload_app";
+const RESTART_MENU_ITEM_ID: &str = "restart_app";
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -48,6 +56,73 @@ fn external_navigation_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin
             true
         })
         .build()
+}
+
+fn build_application_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app)?;
+    let reload = MenuItemBuilder::with_id(RELOAD_MENU_ITEM_ID, "重新载入")
+        .accelerator("CmdOrCtrl+R")
+        .build(app)?;
+    let restart_label = format!("重新启动{}", app.package_info().name);
+    let restart = MenuItemBuilder::with_id(RESTART_MENU_ITEM_ID, restart_label).build(app)?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        let insert_at = app_menu.items()?.len().saturating_sub(1);
+        let separator = PredefinedMenuItem::separator(app)?;
+        app_menu.insert_items(&[&restart, &separator], insert_at)?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(MenuItemKind::Submenu(file_menu)) = menu.items()?.into_iter().find(|item| {
+        matches!(item, MenuItemKind::Submenu(submenu) if submenu.text().as_deref() == Ok("File"))
+    }) {
+        let insert_at = file_menu.items()?.len().saturating_sub(1);
+        let separator = PredefinedMenuItem::separator(app)?;
+        file_menu.insert_items(&[&restart, &separator], insert_at)?;
+    }
+
+    let view_menu = menu.items()?.into_iter().find_map(|item| match item {
+        MenuItemKind::Submenu(submenu)
+            if matches!(submenu.text().as_deref(), Ok("View") | Ok("显示")) =>
+        {
+            Some(submenu)
+        }
+        _ => None,
+    });
+
+    if let Some(view_menu) = view_menu {
+        let separator = PredefinedMenuItem::separator(app)?;
+        view_menu.insert_items(&[&reload, &separator], 0)?;
+    } else {
+        let view_menu = SubmenuBuilder::new(app, "显示").item(&reload).build()?;
+        let menu_items = menu.items()?;
+        let insert_at = menu_items
+            .iter()
+            .position(|item| item.id().as_ref() == tauri::menu::WINDOW_SUBMENU_ID)
+            .unwrap_or(menu_items.len());
+        menu.insert(&view_menu, insert_at)?;
+    }
+
+    Ok(menu)
+}
+
+fn reload_focused_webview(app: &tauri::AppHandle) {
+    let window = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| app.get_webview_window("main"));
+
+    match window {
+        Some(window) => {
+            log::info!("reloading webview: {}", window.label());
+            if let Err(error) = window.reload() {
+                log::error!("failed to reload webview {}: {error}", window.label());
+            }
+        }
+        None => log::warn!("reload requested without an available webview"),
+    }
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -89,6 +164,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(external_navigation_plugin())
+        .menu(build_application_menu)
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::auth_status,
@@ -130,6 +206,14 @@ pub fn run() {
             commands::prewarm_wcx_fetch_daemon();
             setup_tray(app)?;
             Ok(())
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            RELOAD_MENU_ITEM_ID => reload_focused_webview(app),
+            RESTART_MENU_ITEM_ID => {
+                log::info!("application restart requested from menu");
+                app.request_restart();
+            }
+            _ => {}
         })
         .on_page_load(|webview, payload| {
             if webview.label() == "main" && matches!(payload.event(), PageLoadEvent::Finished) {
