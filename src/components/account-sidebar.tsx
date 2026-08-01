@@ -2,6 +2,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -174,6 +175,7 @@ export function AccountSidebar({
   onMoveToBottom,
 }: Props) {
   const [q, setQ] = useState("")
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [contextMenu, setContextMenu] = useState<AccountMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPane, setSettingsPane] = useState<SettingsPane>("connections")
@@ -346,16 +348,37 @@ export function AccountSidebar({
         <div className="search-shell relative rounded-lg">
           <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-sidebar-foreground/45" />
           <Input
+            ref={searchInputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(event) => {
-              if (event.key !== "Enter" || !showSearchCandidate) return
+              if (
+                event.key !== "Enter" ||
+                event.nativeEvent.isComposing ||
+                !showSearchCandidate
+              )
+                return
               event.preventDefault()
               onAddAccount(trimmedQuery)
             }}
             placeholder="搜索公众号、别名或签名"
-            className="h-9 border-0 bg-transparent pr-3 pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/36 focus-visible:ring-1 focus-visible:ring-sidebar-ring/70"
+            className="h-9 border-0 bg-transparent pr-9 pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/36 focus-visible:ring-1 focus-visible:ring-sidebar-ring/70"
           />
+          {q.length > 0 && (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="清除搜索"
+              onClick={() => {
+                setQ("")
+                searchInputRef.current?.focus()
+              }}
+              className="absolute top-1/2 right-1.5 -translate-y-1/2 text-sidebar-foreground/45 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          )}
         </div>
       </SidebarHeader>
       <SidebarContent>
