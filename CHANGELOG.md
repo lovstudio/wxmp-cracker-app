@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 - 2026-08-01
 
 ### Added
 
@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Updated the Tauri runtime, JavaScript API, and build CLI to the 2.11 release line.
 - All desktop wcx operations now share the engine prewarmed at app startup; batch collection, lazy article bodies, direct-link imports, and gateway requests no longer relaunch the frozen sidecar.
 - Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
 - Interactive account search now uses a pre-initialized in-process client with a five-minute cache instead of starting the frozen wcx sidecar for every click.
