@@ -6740,6 +6740,7 @@ dependencies = [
  "include_dir",
  "keyring",
  "log",
+ "objc2-foundation",
  "regex",
  "reqwest",
  "rusqlite",

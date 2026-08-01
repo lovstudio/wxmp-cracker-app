@@ -27,6 +27,33 @@ const RELOAD_MENU_ITEM_ID: &str = "reload_app";
 const RESTART_MENU_ITEM_ID: &str = "restart_app";
 const DEV_SERVER_PORT: u16 = 4382;
 
+/// Wry probes `com.apple.WebKit` during runtime construction. On current macOS
+/// the framework is not registered until it has been loaded at least once, and
+/// probing an unregistered bundle can trap inside CoreFoundation before Tauri
+/// gets a chance to render an error. Register it explicitly before building the
+/// Tauri runtime.
+#[cfg(target_os = "macos")]
+fn ensure_webkit_bundle_loaded() {
+    use objc2_foundation::{ns_string, NSBundle};
+
+    let Some(bundle) =
+        NSBundle::bundleWithPath(ns_string!("/System/Library/Frameworks/WebKit.framework"))
+    else {
+        log::warn!("system WebKit framework bundle was not found");
+        return;
+    };
+
+    if bundle.isLoaded() {
+        return;
+    }
+
+    // `NSBundle::load` bridges to Apple's Objective-C API and is marked unsafe
+    // by objc2. The path is a fixed, system-owned framework location.
+    if !unsafe { bundle.load() } {
+        log::warn!("failed to load system WebKit framework before Tauri startup");
+    }
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -296,6 +323,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    ensure_webkit_bundle_loaded();
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
