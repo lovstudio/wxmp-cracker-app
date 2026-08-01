@@ -1,9 +1,15 @@
+#[cfg(unix)]
+use std::{
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
     webview::PageLoadEvent,
-    Manager,
+    Manager, WebviewWindowBuilder,
 };
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
@@ -19,6 +25,7 @@ mod sync;
 const LOGIN_WINDOW_LABEL: &str = "wxmp-login";
 const RELOAD_MENU_ITEM_ID: &str = "reload_app";
 const RESTART_MENU_ITEM_ID: &str = "restart_app";
+const DEV_SERVER_PORT: u16 = 4382;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -125,6 +132,146 @@ fn reload_focused_webview(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(unix)]
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn schedule_dev_restart() -> bool {
+    let Some(repo_root) = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+    else {
+        log::error!("failed to resolve repository root for dev restart");
+        return false;
+    };
+
+    let tauri_cli = repo_root
+        .ancestors()
+        .map(|ancestor| ancestor.join("node_modules/.bin/tauri"))
+        .find(|candidate| candidate.is_file());
+    let Some(tauri_cli) = tauri_cli else {
+        log::error!(
+            "dev restart skipped because no Tauri CLI was found from {} through its ancestors",
+            repo_root.display()
+        );
+        return false;
+    };
+
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            log::error!("failed to resolve current executable for dev restart: {error}");
+            return false;
+        }
+    };
+
+    let binary_log = std::env::temp_dir().join("wxmp-cracker-tauri-binary-restart.log");
+    let dev_runner_log = std::env::temp_dir().join("wxmp-cracker-tauri-dev-restart.log");
+    let executable_args = std::env::args_os()
+        .skip(1)
+        .map(|argument| shell_single_quote(argument.to_string_lossy().as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = format!(
+        "sleep 2; if /usr/bin/nc -z localhost {DEV_SERVER_PORT} >/dev/null 2>&1; then exec {} {} >> {} 2>&1; else cd {} && exec {} dev >> {} 2>&1; fi",
+        shell_single_quote(executable.to_string_lossy().as_ref()),
+        executable_args,
+        shell_single_quote(binary_log.to_string_lossy().as_ref()),
+        shell_single_quote(repo_root.to_string_lossy().as_ref()),
+        shell_single_quote(tauri_cli.to_string_lossy().as_ref()),
+        shell_single_quote(dev_runner_log.to_string_lossy().as_ref()),
+    );
+
+    let mut command = Command::new("sh");
+    command
+        .arg("-lc")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+
+    match command.spawn() {
+        Ok(_) => {
+            log::info!(
+                "dev restart scheduled, binary_log={}, dev_runner_log={}",
+                binary_log.display(),
+                dev_runner_log.display()
+            );
+            true
+        }
+        Err(error) => {
+            log::error!("failed to schedule dev restart: {error}");
+            false
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn schedule_dev_restart() -> bool {
+    false
+}
+
+fn restart_app(app: &tauri::AppHandle) {
+    if tauri::is_dev() {
+        if schedule_dev_restart() {
+            app.exit(0);
+        } else {
+            log::error!("development restart was cancelled to keep the current app usable");
+        }
+        return;
+    }
+
+    app.request_restart();
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Err(error) = app.show() {
+        log::warn!("failed to reveal app after Dock activation: {error}");
+    }
+
+    let window = app.get_webview_window("main").or_else(|| {
+        let config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|config| config.label == "main")?;
+
+        match WebviewWindowBuilder::from_config(app, config).and_then(|builder| builder.build()) {
+            Ok(window) => {
+                log::info!("recreated main window after Dock activation");
+                Some(window)
+            }
+            Err(error) => {
+                log::error!("failed to recreate main window after Dock activation: {error}");
+                None
+            }
+        }
+    });
+
+    let Some(window) = window else {
+        log::warn!("Dock activation could not find or recreate the main window");
+        return;
+    };
+
+    if let Err(error) = window.unminimize() {
+        log::warn!("failed to unminimize main window after Dock activation: {error}");
+    }
+    if let Err(error) = window.show() {
+        log::error!("failed to show main window after Dock activation: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("failed to focus main window after Dock activation: {error}");
+    }
+
+    log::info!("main window restored after Dock activation");
+}
+
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
     log::info!("tray-icon.png embedded bytes: {}", tray_icon_bytes.len());
@@ -211,7 +358,7 @@ pub fn run() {
             RELOAD_MENU_ITEM_ID => reload_focused_webview(app),
             RESTART_MENU_ITEM_ID => {
                 log::info!("application restart requested from menu");
-                app.request_restart();
+                restart_app(app);
             }
             _ => {}
         })
@@ -221,6 +368,20 @@ pub fn run() {
                 let _ = webview.window().show();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                log::info!("Dock activation requested, has_visible_windows={has_visible_windows}");
+                show_main_window(app);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
