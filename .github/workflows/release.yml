@@ -134,11 +134,13 @@ jobs:
           bun tauri build ${{ matrix.args }}
           $tag = "${{ needs.create-release.outputs.tag }}"
           $asset = "wxmp-cracker-app-$tag-windows-x64.zip"
-          $exe = "src-tauri\target\release\wxmp-cracker.exe"
-          if (!(Test-Path $exe)) {
-            throw "Expected Windows executable not found: $exe"
+          $exe = Get-ChildItem -Path "src-tauri\target\release" -Filter "*.exe" -File |
+            Where-Object { $_.Name -ne "wcx.exe" } |
+            Select-Object -First 1
+          if ($null -eq $exe) {
+            throw "Expected Windows application executable not found in src-tauri\target\release"
           }
-          Compress-Archive -Path $exe -DestinationPath $asset -Force
+          Compress-Archive -Path $exe.FullName -DestinationPath $asset -Force
           gh release upload $tag $asset --repo "$env:GITHUB_REPOSITORY" --clobber
 
       - name: Build and upload Linux app bundles
