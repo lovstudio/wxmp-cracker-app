@@ -25,7 +25,7 @@ export default async function handler(request, response) {
 
   try {
     const input = await readJsonBody(request)
-    const clientName = getString(input.clientName, "微探桌面端", 80)
+    const clientName = getString(input.clientName, "微碳桌面端", 80)
     const scope = getString(input.scope, "wxmp-cracker", 40)
     const supabase = adminClient()
     const deviceCode = randomHex(32)

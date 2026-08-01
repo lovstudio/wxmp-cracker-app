@@ -108,7 +108,7 @@ const workflowSteps: IconBlock[] = [
   {
     icon: ScanLine,
     title: "扫码微信公众号",
-    body: "用手机确认登录 mp.weixin.qq.com，微探会把必要 cookie 写回 wcx 配置。",
+    body: "用手机确认登录 mp.weixin.qq.com，微碳会把必要 cookie 写回 wcx 配置。",
   },
   {
     icon: Newspaper,
@@ -221,7 +221,7 @@ function LandingPage({ release }: { release: ReleaseInfo }) {
             <Sparkles className="site-icon" aria-hidden="true" />
             Lovstudio 出品 · 微信公众号内容采集与洞察工作台
           </div>
-          <h1 className="site-hero-title">微探</h1>
+          <h1 className="site-hero-title">微碳</h1>
           <p className="site-hero-copy">
             把分散在微信公众号后台、wcx
             缓存和本地文章库里的内容，整理成一个可阅读、可续采、可分析的桌面研究台。
@@ -260,7 +260,7 @@ function LandingPage({ release }: { release: ReleaseInfo }) {
             <p className="site-section-eyebrow">Product</p>
             <h2>为公众号资料库而生</h2>
             <p>
-              微探不是通用笔记工具。它围绕公众号账号、文章列表、正文内容、授权配额和可复用采集能力设计。
+              微碳不是通用笔记工具。它围绕公众号账号、文章列表、正文内容、授权配额和可复用采集能力设计。
             </p>
           </div>
           <div className="site-feature-grid">
@@ -351,7 +351,7 @@ function DocsPage({ release }: { release: ReleaseInfo }) {
     <main className="site-docs-page">
       <div className="site-container site-docs-layout">
         <aside className="site-docs-nav" aria-label="文档导航">
-          <div className="site-docs-nav-title">微探文档</div>
+          <div className="site-docs-nav-title">微碳文档</div>
           {docSections.map((section) => (
             <a href={`#${section.id}`} key={section.id}>
               {section.title}
@@ -393,13 +393,13 @@ function DocsPage({ release }: { release: ReleaseInfo }) {
 
           <DocBlock id="login" icon={ShieldCheck} title="登录与授权">
             <p>
-              微探有两类登录：Lovstudio
+              微碳有两类登录：Lovstudio
               账号用于授权、试用和配额同步；微信公众号登录用于获取公众号后台采集能力。
             </p>
             <ol>
-              <li>打开微探后先登录 Lovstudio 账号。</li>
+              <li>打开微碳后先登录 Lovstudio 账号。</li>
               <li>点击扫码登录微信公众号，桌面端会打开内嵌登录窗口。</li>
-              <li>手机扫码确认后，微探会捕获必要 cookie 并写入 wcx 配置。</li>
+              <li>手机扫码确认后，微碳会捕获必要 cookie 并写入 wcx 配置。</li>
               <li>
                 需要正式能力时，在激活窗口输入绑定当前 Lovstudio 账号的激活码。
               </li>
@@ -420,7 +420,7 @@ function DocsPage({ release }: { release: ReleaseInfo }) {
           </DocBlock>
 
           <DocBlock id="data" icon={FileText} title="数据位置">
-            <p>微探与 wcx 共用本机数据，方便 CLI、桌面端和自动化流程互通。</p>
+            <p>微碳与 wcx 共用本机数据，方便 CLI、桌面端和自动化流程互通。</p>
             <dl className="site-doc-data">
               <div>
                 <dt>文章缓存</dt>
@@ -465,9 +465,9 @@ function SiteHeader({ active }: { active: "home" | "docs" }) {
   return (
     <header className="site-header">
       <nav className="site-container site-nav" aria-label="主导航">
-        <a className="site-brand" href="/" aria-label="微探首页">
+        <a className="site-brand" href="/" aria-label="微碳首页">
           <img src="/logo.png" alt="" />
-          <span>微探</span>
+          <span>微碳</span>
         </a>
         <div className="site-nav-links">
           <a data-active={active === "home"} href="/#product">
@@ -489,7 +489,7 @@ function SiteFooter() {
     <footer className="site-footer">
       <div className="site-container site-footer-grid">
         <div>
-          <div className="site-footer-brand">微探 · Lovstudio</div>
+          <div className="site-footer-brand">微碳 · Lovstudio</div>
           <p>微信公众号内容采集、阅读与分析桌面工作台。</p>
         </div>
         <div className="site-footer-links">

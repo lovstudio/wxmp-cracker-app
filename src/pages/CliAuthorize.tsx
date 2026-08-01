@@ -138,7 +138,7 @@ export function CliAuthorize() {
           <CardHeader>
             <CardTitle>登录 Lovstudio</CardTitle>
             <CardDescription>
-              需要先登录 Lovstudio 账号，才能授权微探桌面端。
+              需要先登录 Lovstudio 账号，才能授权微碳桌面端。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -169,7 +169,7 @@ export function CliAuthorize() {
               授权成功
             </CardTitle>
             <CardDescription>
-              回到微探桌面端，它会在几秒内自动完成登录。
+              回到微碳桌面端，它会在几秒内自动完成登录。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -184,15 +184,15 @@ export function CliAuthorize() {
 
   const clientLabel =
     deviceRow?.client_name ||
-    (deviceRow?.scope === "wxmp-cracker" ? "微探桌面端" : "Lovstudio 客户端")
+    (deviceRow?.scope === "wxmp-cracker" ? "微碳桌面端" : "Lovstudio 客户端")
 
   return (
     <main className="flex min-h-dvh items-center justify-center p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>授权微探登录</CardTitle>
+          <CardTitle>授权微碳登录</CardTitle>
           <CardDescription>
-            确认后，微探桌面端会绑定当前 Lovstudio 账号。
+            确认后，微碳桌面端会绑定当前 Lovstudio 账号。
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">

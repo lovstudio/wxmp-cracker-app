@@ -61,7 +61,7 @@ export async function startLovstudioDeviceAuth() {
   const response = await postJson<DeviceAuthStartResponse>(
     "/api/lovcode/auth/start",
     {
-      clientName: "微探桌面端",
+      clientName: "微碳桌面端",
       scope: "wxmp-cracker",
     }
   )

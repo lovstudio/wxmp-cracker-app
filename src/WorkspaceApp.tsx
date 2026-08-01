@@ -794,7 +794,7 @@ function ActivationWatermark({
       onClick={onActivate}
     >
       <span className="block font-heading text-2xl leading-none font-semibold">
-        微探未激活
+        微碳未激活
       </span>
       <span className="mt-1 block text-sm">立即激活</span>
     </button>
