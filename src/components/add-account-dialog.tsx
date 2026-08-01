@@ -9,6 +9,7 @@ import {
   LoaderCircleIcon,
   PlusIcon,
   SearchIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -18,7 +19,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AccountSearchResult, FetchAccountProgress } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import { isWxmpAuthError } from "@/lib/toast"
+import {
+  isWxmpAuthError,
+  isWxmpLocalCooldownError,
+  isWxmpRateLimitError,
+} from "@/lib/toast"
+import { WXMP_BATCH_FETCH_GUARD_DESCRIPTION } from "@/lib/wxmp-availability"
 
 type Step = "search" | "fetch"
 type AddMode = "account" | "article"
@@ -109,11 +115,17 @@ function AddAccountDialogContent({
   const hasCurrentResults =
     searchedQuery === trimmedQuery && searchResults.length > 0
   const actionBusy = busy || searching || importingArticle
+  const rateLimited = hasRateLimitError(progressEvents)
   const canSearch = trimmedQuery.length > 0
   const canImportArticle = trimmedArticleLink.length > 0
   const canConfirmSelection = Boolean(selectedAccount)
   const canFetch =
     Boolean(selectedAccount) && Number.isFinite(parsedLimit) && parsedLimit > 0
+
+  const switchToArticleImport = () => {
+    setMode("article")
+    setArticleError(null)
+  }
 
   const resetSearchResults = () => {
     setSearchedQuery("")
@@ -327,11 +339,7 @@ function AddAccountDialogContent({
                   disabled={!canSearch || actionBusy}
                   onClick={() => void searchAccounts()}
                 >
-                  {searching ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <SearchIcon className="size-4" />
-                  )}
+                  <SearchIcon className="size-4" />
                   搜索
                 </Button>
               </div>
@@ -345,6 +353,7 @@ function AddAccountDialogContent({
               selectedFakeid={selectedFakeid}
               onSelect={setSelectedFakeid}
               onLogin={onLogin}
+              onImportArticle={switchToArticleImport}
             />
           </div>
         ) : (
@@ -376,6 +385,11 @@ function AddAccountDialogContent({
                 />
                 <span>抓正文</span>
               </label>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+              <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>{WXMP_BATCH_FETCH_GUARD_DESCRIPTION}</span>
             </div>
 
             {selectedAccount && (busy || progressEvents.length > 0) ? (
@@ -429,23 +443,21 @@ function AddAccountDialogContent({
                   (hasCurrentResults ? !canConfirmSelection : !canSearch)
                 }
               >
-                {searching ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : hasCurrentResults ? (
+                {hasCurrentResults ? (
                   <CheckIcon className="size-4" />
                 ) : (
                   <SearchIcon className="size-4" />
                 )}
                 {hasCurrentResults ? "确认选择" : "搜索公众号"}
               </Button>
+            ) : rateLimited ? (
+              <Button type="button" disabled={actionBusy} onClick={onLogin}>
+                完成验证后重新登录
+              </Button>
             ) : (
               <Button type="submit" disabled={!canFetch || busy}>
-                {busy ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : (
-                  <PlusIcon className="size-4" />
-                )}
-                开始抓取
+                {!busy ? <PlusIcon className="size-4" /> : null}
+                {busy ? "抓取中" : "开始抓取"}
               </Button>
             )}
           </div>
@@ -463,6 +475,7 @@ function SearchResults({
   selectedFakeid,
   onSelect,
   onLogin,
+  onImportArticle,
 }: {
   busy: boolean
   error: string | null
@@ -471,10 +484,15 @@ function SearchResults({
   selectedFakeid: string | null
   onSelect: (fakeid: string) => void
   onLogin: () => void
+  onImportArticle: () => void
 }) {
   if (busy) {
     return (
-      <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-border/70 text-sm text-muted-foreground">
+      <div
+        className="flex h-24 items-center justify-center rounded-md border border-dashed border-border/70 text-sm text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
         <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
         正在搜索
       </div>
@@ -483,17 +501,18 @@ function SearchResults({
 
   if (error) {
     const isAuthError = isWxmpAuthError(error)
+    const isRateLimitError = isWxmpRateLimitError(error)
     return (
       <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
         <span className="min-w-0 break-words">{error}</span>
-        {isAuthError ? (
+        {isAuthError || isRateLimitError ? (
           <Button
             type="button"
             size="sm"
             className="h-7 shrink-0"
-            onClick={onLogin}
+            onClick={isAuthError ? onLogin : onImportArticle}
           >
-            重新登录
+            {isAuthError ? "重新登录" : "文章链接"}
           </Button>
         ) : null}
       </div>
@@ -549,6 +568,11 @@ function FetchProcess({
   }
   const visibleEvents = events.length > 0 ? events : [fallbackEvent]
   const latest = visibleEvents[visibleEvents.length - 1] ?? fallbackEvent
+  const steps = fetchSteps(withContent)
+  const currentStepIndex = activeFetchStepIndex(steps, visibleEvents)
+  const currentStep = steps[currentStepIndex] ?? steps[0]
+  const localCooldown = isWxmpLocalCooldownError(latest.message)
+  const rateLimited = isWxmpRateLimitError(latest.message)
   const progressEvent =
     [...visibleEvents]
       .reverse()
@@ -567,23 +591,40 @@ function FetchProcess({
           100
         )
       : 0
-  const recentEvents = visibleEvents.slice(-8)
+  const headline = localCooldown
+    ? "本地保护冷却中"
+    : rateLimited
+      ? "微信文章列表接口限流"
+      : latest.status === "error"
+        ? "抓取中断"
+        : latest.status === "warning"
+          ? "部分内容需要重试"
+          : latest.stage === "complete" && latest.status === "done"
+            ? "抓取完成"
+            : currentStep.label
 
   return (
-    <div className="rounded-md border border-border/70 bg-muted/20 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium">抓取过程</div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {latest.message}
-          </div>
-          {latest.title ? (
-            <div className="mt-1 truncate text-xs text-muted-foreground">
-              {latest.title}
-            </div>
-          ) : null}
+    <div
+      className="rounded-lg border border-border/70 bg-muted/20 p-3"
+      aria-busy={latest.status === "running"}
+      aria-live="polite"
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-medium">{headline}</div>
+        <div
+          className={`mt-1 text-xs text-muted-foreground ${
+            latest.status === "error" || latest.status === "warning"
+              ? "leading-5 break-words"
+              : "truncate"
+          }`}
+        >
+          {latest.message}
         </div>
-        <FetchStateIcon state={eventState(latest)} />
+        {latest.title ? (
+          <div className="mt-1 truncate text-xs text-muted-foreground">
+            {latest.title}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-background/80">
@@ -593,43 +634,56 @@ function FetchProcess({
         />
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {fetchSteps(withContent).map((step) => {
-          const state = processStepState(step.stages, visibleEvents)
+      <ol
+        className={`mt-3 grid gap-2 ${steps.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}
+      >
+        {steps.map((step, index) => {
+          const state = fetchStepState(step, index, currentStepIndex, latest)
+          const isCurrent = index === currentStepIndex && state !== "done"
           return (
-            <div
+            <li
               key={step.label}
-              className="flex min-w-0 items-center gap-2 rounded-md border border-border/50 bg-background/45 px-2 py-1.5"
+              className={`flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 ${
+                state === "error"
+                  ? "border-destructive/40 bg-destructive/10"
+                  : isCurrent
+                    ? "border-primary/40 bg-primary/10"
+                    : "border-border/50 bg-background/45"
+              }`}
+              aria-current={isCurrent ? "step" : undefined}
             >
               <FetchStateIcon state={state} small />
-              <span className="truncate text-xs text-muted-foreground">
-                {step.label}
+              <span className="min-w-0">
+                <span className="block text-[10px] leading-none text-muted-foreground">
+                  第 {index + 1} 步
+                </span>
+                <span
+                  className={`mt-1 block truncate text-xs ${
+                    isCurrent
+                      ? "font-medium text-foreground"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {step.label}
+                </span>
               </span>
-            </div>
+            </li>
           )
         })}
-      </div>
+      </ol>
 
-      <div className="mt-3 max-h-32 space-y-1 overflow-y-auto pr-1">
-        {recentEvents.map((event, index) => (
-          <div
-            key={`${event.stage}-${event.message}-${index}`}
-            className="flex min-w-0 items-start gap-2 text-xs leading-5"
-          >
-            <FetchStateIcon state={eventState(event)} small />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-foreground/85">
-                {formatProgressMessage(event)}
-              </div>
-              {event.title ? (
-                <div className="truncate text-muted-foreground">
-                  {event.title}
-                </div>
-              ) : null}
-            </div>
+      {rateLimited ? (
+        <div className="mt-3 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5">
+          <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
+            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+            <span>
+              {localCooldown
+                ? "这是上一次微信返回 200013 后记录的本地冷却；本次没有再请求微信。重新扫码成功后会创建新会话，再尝试一次标准列表请求。"
+                : "微信文章列表接口刚返回 ret=200013；这不等于公众号后台账号异常。已完成内容会保留，应用会停止当前批次，避免继续叠加请求。"}
+            </span>
           </div>
-        ))}
-      </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -779,74 +833,58 @@ function isWechatArticleInput(value: string) {
 
 function fetchSteps(withContent: boolean) {
   return [
-    { label: "确认目标公众号", stages: ["prepare"] },
-    { label: "写入账号信息", stages: ["account"] },
-    { label: "抓取文章索引", stages: ["articles"] },
-    ...(withContent ? [{ label: "抓取正文", stages: ["content"] }] : []),
-    { label: "完成入库", stages: ["complete"] },
+    {
+      label: "获取文章列表",
+      stages: ["prepare", "account", "articles"],
+      completedBy: "articles",
+    },
+    ...(withContent
+      ? [
+          {
+            label: "下载文章正文",
+            stages: ["content"],
+            completedBy: "content",
+          },
+        ]
+      : []),
+    { label: "完成", stages: ["complete"], completedBy: "complete" },
   ]
 }
 
-function processStepState(
-  stages: string[],
+function hasRateLimitError(events: FetchAccountProgress[]) {
+  return events.some(
+    (event) => event.status === "error" && isWxmpRateLimitError(event.message)
+  )
+}
+
+type FetchStep = ReturnType<typeof fetchSteps>[number]
+
+function activeFetchStepIndex(
+  steps: FetchStep[],
   events: FetchAccountProgress[]
+): number {
+  for (let eventIndex = events.length - 1; eventIndex >= 0; eventIndex -= 1) {
+    const stepIndex = steps.findIndex((step) =>
+      step.stages.includes(events[eventIndex].stage)
+    )
+    if (stepIndex >= 0) return stepIndex
+  }
+
+  return 0
+}
+
+function fetchStepState(
+  step: FetchStep,
+  stepIndex: number,
+  currentStepIndex: number,
+  latest: FetchAccountProgress
 ): ProcessStepState {
-  if (
-    events.some(
-      (event) => event.status === "error" && stages.includes(event.stage)
-    )
-  ) {
-    return "error"
-  }
-
-  if (
-    events.some(
-      (event) => event.status === "warning" && stages.includes(event.stage)
-    )
-  ) {
-    return "warning"
-  }
-
-  if (
-    events.some(
-      (event) => event.status === "done" && stages.includes(event.stage)
-    )
-  ) {
+  if (stepIndex < currentStepIndex) return "done"
+  if (stepIndex > currentStepIndex) return "pending"
+  if (latest.status === "error") return "error"
+  if (latest.status === "warning") return "warning"
+  if (latest.status === "done" && latest.stage === step.completedBy)
     return "done"
-  }
 
-  if (
-    events.some(
-      (event) => event.status === "running" && stages.includes(event.stage)
-    )
-  ) {
-    return "running"
-  }
-
-  const latest = events[events.length - 1]
-  if (latest?.stage === "complete" && latest.status === "done") {
-    return "done"
-  }
-
-  return "pending"
-}
-
-function eventState(event: FetchAccountProgress): ProcessStepState {
-  if (event.status === "done") return "done"
-  if (event.status === "warning") return "warning"
-  if (event.status === "error") return "error"
-  if (event.status === "running") return "running"
-  return "pending"
-}
-
-function formatProgressMessage(event: FetchAccountProgress) {
-  if (
-    typeof event.current === "number" &&
-    typeof event.total === "number" &&
-    event.total > 0
-  ) {
-    return `${event.message} (${event.current}/${event.total})`
-  }
-
-  return event.message
+  return "running"
 }

@@ -217,6 +217,10 @@ function WorkspaceApp() {
       setAuthExpired(expired)
       setLastAuthCheckAt(checkedAt)
 
+      if (sessionActive && s.account?.avatar) {
+        await refreshAccounts()
+      }
+
       if (expired) {
         const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
         if (options.notifyExpired || !authExpiredNotifiedRef.current) {
@@ -251,7 +255,7 @@ function WorkspaceApp() {
       authRefreshInFlightRef.current = false
       setAuthChecking(false)
     }
-  }, [])
+  }, [refreshAccounts])
 
   const checkWechatSession = useCallback(
     async (toastOnSuccess = false) => {
@@ -329,6 +333,7 @@ function WorkspaceApp() {
     }, 0)
     const ok = onLoginSuccess(() => {
       toast.success("登录成功，已保存凭证")
+      setFetchProgressEvents([])
       refreshAuthSilently()
       refreshLicenseStatus()
     })
@@ -477,19 +482,9 @@ function WorkspaceApp() {
     } catch (e) {
       const message = errorMessage(e)
       setFetchProgressEvents((currentEvents) =>
-        [
-          ...currentEvents,
-          {
-            fakeid: account.fakeid,
-            nickname: account.nickname,
-            stage: "error",
-            status: "error",
-            message,
-            current: null,
-            total: null,
-            title: null,
-          },
-        ].slice(-MAX_FETCH_PROGRESS_EVENTS)
+        appendFetchError(currentEvents, account, message).slice(
+          -MAX_FETCH_PROGRESS_EVENTS
+        )
       )
       toast.wxmpError(message, api.openLogin)
     } finally {
@@ -842,6 +837,31 @@ function initialFetchProgress(
     total: limit,
     title: null,
   }
+}
+
+function appendFetchError(
+  events: FetchAccountProgress[],
+  account: AccountSearchResult,
+  message: string
+) {
+  const latest = events[events.length - 1]
+  if (latest?.status === "error" && latest.message === message) {
+    return events
+  }
+
+  return [
+    ...events,
+    {
+      fakeid: account.fakeid,
+      nickname: account.nickname,
+      stage: latest?.stage ?? "error",
+      status: "error",
+      message,
+      current: latest?.current ?? null,
+      total: latest?.total ?? null,
+      title: latest?.title ?? null,
+    },
+  ]
 }
 
 function needsLicenseForFetch(

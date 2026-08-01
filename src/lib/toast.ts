@@ -1,4 +1,12 @@
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { toast as sonnerToast, type ExternalToast } from "sonner"
+import { isWxmpAuthError, isWxmpRateLimitError } from "@/lib/wxmp-errors"
+
+export {
+  isWxmpAuthError,
+  isWxmpLocalCooldownError,
+  isWxmpRateLimitError,
+} from "@/lib/wxmp-errors"
 
 type ToastKind = "success" | "error" | "info" | "warning"
 type ToastActionHandler = () => unknown | Promise<unknown>
@@ -15,8 +23,10 @@ export const copyableToast = {
     options?: ToastOptionsWithoutActions
   ) =>
     isWxmpAuthError(message)
-      ? showWxmpAuthErrorToast(message, onLogin, options)
-      : showCopyableToast("error", message, options),
+      ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
+      : isWxmpRateLimitError(message)
+        ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
+        : showCopyableToast("error", message, options),
   info: (message: string, options?: ExternalToast) =>
     showCopyableToast("info", message, options),
   warning: (message: string, options?: ExternalToast) =>
@@ -39,9 +49,10 @@ function showCopyableToast(
   })
 }
 
-function showWxmpAuthErrorToast(
+function showWxmpRecoveryToast(
   message: string,
   onLogin: ToastActionHandler,
+  actionLabel: string,
   options?: ToastOptionsWithoutActions
 ) {
   return sonnerToast.error(message, {
@@ -54,7 +65,7 @@ function showWxmpAuthErrorToast(
       },
     },
     action: {
-      label: "重新登录",
+      label: actionLabel,
       onClick: () => {
         void Promise.resolve(onLogin()).catch((error) => {
           showCopyableToast("error", errorMessage(error))
@@ -64,29 +75,21 @@ function showWxmpAuthErrorToast(
   })
 }
 
-export function isWxmpAuthError(message: string) {
-  const normalized = message.toLowerCase()
-
-  return (
-    message.includes("认证失败") ||
-    message.includes("尚未登录") ||
-    message.includes("请先扫码登录") ||
-    message.includes("登录已过期") ||
-    message.includes("重新扫码") ||
-    normalized.includes("auth failed") ||
-    normalized.includes("invalid session") ||
-    normalized.includes("re-login needed") ||
-    normalized.includes("ret=200003")
-  )
-}
-
 export async function copyText(text: string) {
+  try {
+    await writeClipboardText(text)
+    sonnerToast.success("已复制")
+    return true
+  } catch {
+    // Browser preview has no Tauri plugin, so keep the web clipboard path.
+  }
+
   try {
     await navigator.clipboard.writeText(text)
     sonnerToast.success("已复制")
     return true
   } catch {
-    // Tauri/WebKit may reject Clipboard API outside a focused secure context.
+    // Clipboard API may reject writes outside a focused secure context.
   }
 
   const textarea = document.createElement("textarea")
@@ -99,7 +102,10 @@ export async function copyText(text: string) {
   textarea.select()
 
   try {
-    document.execCommand("copy")
+    const copied = document.execCommand("copy")
+    if (!copied) {
+      throw new Error("document.execCommand returned false")
+    }
     sonnerToast.success("已复制")
     return true
   } catch {

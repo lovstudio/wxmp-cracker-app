@@ -982,6 +982,7 @@ export function ArticleList({
       {menu && (
         <ArticleContextMenu
           menu={menu}
+          accountName={selectedAccount?.nickname ?? null}
           fetchingAid={fetchingAid}
           busy={collectionBusy}
           onClose={() => setMenu(null)}
@@ -1747,6 +1748,7 @@ function escapeRegExp(value: string): string {
 
 function ArticleContextMenu({
   menu,
+  accountName,
   fetchingAid,
   busy,
   onClose,
@@ -1754,6 +1756,7 @@ function ArticleContextMenu({
   onFetchContent,
 }: {
   menu: ArticleMenuState
+  accountName: string | null
   fetchingAid: string | null
   busy: boolean
   onClose: () => void
@@ -1836,9 +1839,48 @@ function ArticleContextMenu({
         <FileTextIcon className="size-3.5" />
         复制标题和链接
       </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={busy}
+        onClick={() => run(() => copyArticleBasicInfo(article, accountName))}
+      >
+        <CopyIcon className="size-3.5" />
+        复制基本信息（含文件地址）
+      </button>
     </div>,
     document.body
   )
+}
+
+async function copyArticleBasicInfo(
+  article: ArticleSummary,
+  accountName: string | null
+) {
+  if (!article.has_content) {
+    toast.warning("请先抓取正文，再复制包含文件地址的基本信息")
+    return
+  }
+
+  try {
+    const localFilePath = await api.exportArticleLocal(article.aid)
+    const basicInfo = [
+      `文章标题：${article.title}`,
+      accountName ? `公众号：${accountName}` : null,
+      article.author ? `作者：${article.author}` : null,
+      `发布时间：${formatDate(article.create_time)}`,
+      `文章 ID：${article.aid}`,
+      `公众号 ID：${article.fakeid}`,
+      `原文链接：${article.link}`,
+      `文件地址：${localFilePath}`,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n")
+
+    await copyText(basicInfo)
+  } catch (error) {
+    toast.error(`复制基本信息失败：${errorMessage(error)}`)
+  }
 }
 
 function accountToSearchResult(account: Account): AccountSearchResult {
@@ -1886,7 +1928,7 @@ function createArticleMenuState(
   clientY: number
 ): ArticleMenuState {
   const width = 226
-  const height = 254
+  const height = 284
   const padding = 8
   const x = Math.min(clientX, window.innerWidth - width - padding)
   const y = Math.min(clientY, window.innerHeight - height - padding)

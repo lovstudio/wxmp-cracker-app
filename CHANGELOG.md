@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added a persistent, cross-process request guard for authenticated WeChat searches and article pagination, including an automatic cooldown after `ret=200013`.
+- Added guided account verification actions and clear cooldown messaging when WeChat pauses access.
+- Added an explicit low-frequency notice before starting a batch collection.
+
+### Changed
+
+- All desktop wcx operations now share the engine prewarmed at app startup; batch collection, lazy article bodies, direct-link imports, and gateway requests no longer relaunch the frozen sidecar.
+- Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
+- Interactive account search now uses a pre-initialized in-process client with a five-minute cache instead of starting the frozen wcx sidecar for every click.
+- The currently logged-in Official Account now reads its own backend publish history directly; cross-account collection remains isolated on its separate source.
+- Restored account batch collection with current backend parameters and at least 15 seconds between authenticated requests.
+- Standardized article-list requests to the Official Account backend's 20-record page shape, then applies the requested N limit locally.
+- Aligned the login webview and wcx request browser identity so captured cookies are reused with the same Chrome profile.
+- Article bodies now download serially with a randomized 3–7 second interval; direct article-link import remains available as a fallback.
+
+### Fixed
+
+- Account avatar refreshes now backfill missing images from the logged-in profile or search results, while sparse imports and collection updates preserve previously stored profile metadata.
+- Removed the sidecar cold start and article-batch pacing delay from interactive account search, and reduced its loading UI to one progress indicator.
+- Kept account search isolated from article-list pagination so an interactive lookup does not inherit the batch fetch cooldown.
+- An explicit re-login now receives a fresh request guard even when WeChat keeps the same token and cookie values.
+- Local cooldowns and fresh `ret=200013` responses are now labeled separately, so the UI no longer presents a blocked local request as a new WeChat response.
+- Search, own-account publish history, and cross-account article indexes now keep separate cooldown states, so one restricted source no longer blocks the healthy sources.
+
 ## 0.3.2 - 2026-07-16
 
 ### Added

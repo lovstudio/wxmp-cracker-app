@@ -47,6 +47,7 @@ export interface LoginAccount {
   avatar: string | null
   alias: string | null
   service_type: string | null
+  bizuin: string | null
 }
 
 export interface AuthStatus {

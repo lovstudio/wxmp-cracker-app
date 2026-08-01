@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs, io,
     sync::{Arc, Mutex},
@@ -15,7 +17,9 @@ use crate::db::config_path;
 
 const LOGIN_URL: &str = "https://mp.weixin.qq.com/";
 const LOGIN_LABEL: &str = "wxmp-login";
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+// Keep this aligned with wcx.fetcher.BROWSER_PROFILE. Cookies captured under
+// one browser identity and reused under another are an avoidable risk signal.
+const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const LOGIN_COOKIE_CAPTURE_ATTEMPTS: usize = 20;
 const LOGIN_COOKIE_CAPTURE_DELAY_MS: u64 = 500;
 const REQUIRED_LOGIN_COOKIE: &str = "slave_sid";
@@ -43,6 +47,7 @@ pub struct LoginAccount {
     pub avatar: Option<String>,
     pub alias: Option<String>,
     pub service_type: Option<String>,
+    pub bizuin: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -68,6 +73,12 @@ pub fn write_config(cfg: &WcxConfig) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(cfg)?;
     fs::write(&p, json).context("write wcx config.json")?;
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&p)?.permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&p, permissions).context("protect wcx config.json")?;
+    }
     Ok(())
 }
 
@@ -480,6 +491,7 @@ fn parse_login_account(html: &str) -> Option<LoginAccount> {
         extract_js_string_field(html, "serviceType"),
         extract_js_string_field(html, "service_type"),
     ]);
+    let bizuin = extract_js_numeric_field(html, "bizuin");
 
     let account = LoginAccount {
         nickname,
@@ -487,6 +499,7 @@ fn parse_login_account(html: &str) -> Option<LoginAccount> {
         avatar,
         alias,
         service_type,
+        bizuin,
     };
 
     if account.nickname.is_some()
@@ -494,11 +507,47 @@ fn parse_login_account(html: &str) -> Option<LoginAccount> {
         || account.avatar.is_some()
         || account.alias.is_some()
         || account.service_type.is_some()
+        || account.bizuin.is_some()
     {
         Some(account)
     } else {
         None
     }
+}
+
+fn extract_js_numeric_field(source: &str, field: &str) -> Option<String> {
+    let mut offset = 0;
+    while let Some(found) = source[offset..].find(field) {
+        let index = offset + found;
+        offset = index + field.len();
+
+        if is_identifier_byte(source.as_bytes().get(index.wrapping_sub(1)).copied())
+            || is_identifier_byte(source.as_bytes().get(index + field.len()).copied())
+        {
+            continue;
+        }
+
+        let mut rest = source[index + field.len()..].trim_start();
+        rest = rest
+            .strip_prefix("&quot;")
+            .or_else(|| rest.strip_prefix('"'))
+            .or_else(|| rest.strip_prefix('\''))
+            .unwrap_or(rest)
+            .trim_start();
+        let Some(after_colon) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let digits: String = after_colon
+            .trim_start()
+            .trim_start_matches(['"', '\''])
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if !digits.is_empty() {
+            return Some(digits);
+        }
+    }
+    None
 }
 
 fn first_nonempty<const N: usize>(values: [Option<String>; N]) -> Option<String> {
@@ -654,5 +703,19 @@ mod tests {
             "https://mp.weixin.qq.com/cgi-bin/home?t=home/index&lang=zh_CN&token=123",
             "<script>var real_nick_name = '微探';</script>",
         ));
+    }
+
+    #[test]
+    fn login_browser_identity_matches_wcx_profile() {
+        assert!(USER_AGENT_VALUE.contains("Chrome/124.0.0.0"));
+    }
+
+    #[test]
+    fn login_account_extracts_html_encoded_bizuin() {
+        let html = r#"<script>var data = {&quot;bizuin&quot;:3869894872,&quot;nickname&quot;:&quot;手工川&quot;};</script>"#;
+
+        let account = parse_login_account(html).unwrap();
+
+        assert_eq!(account.bizuin.as_deref(), Some("3869894872"));
     }
 }
