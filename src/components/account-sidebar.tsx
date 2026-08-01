@@ -318,14 +318,14 @@ export function AccountSidebar({
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="font-heading text-2xl leading-none font-semibold text-sidebar-foreground">
-                微碳
+                微探
               </div>
               <div className="mt-1 text-[12px] font-medium text-sidebar-foreground/58">
                 Powered by Lovstudio
               </div>
             </div>
             <div className="brand-mark-frame flex size-9 items-center justify-center rounded-md p-1.5 text-sidebar-primary">
-              <img src="/app-logo.svg" alt="微碳" className="size-full" />
+              <img src="/app-logo.svg" alt="微探" className="size-full" />
             </div>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">

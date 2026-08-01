@@ -20,7 +20,7 @@ export default function App() {
 
   return (
     <WorkspaceErrorBoundary>
-      <Suspense fallback={<div className="app-loading-screen">正在启动微碳</div>}>
+      <Suspense fallback={<div className="app-loading-screen">正在启动微探</div>}>
         <WorkspaceShell />
       </Suspense>
     </WorkspaceErrorBoundary>
@@ -63,7 +63,7 @@ class WorkspaceErrorBoundary extends Component<
     return (
       <div className="app-loading-screen app-error-screen">
         <div>
-          <h1>微碳启动失败</h1>
+          <h1>微探启动失败</h1>
           <p>{this.state.error.message}</p>
         </div>
       </div>

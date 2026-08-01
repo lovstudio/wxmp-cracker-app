@@ -1,10 +1,10 @@
-# 微碳
+# 微探
 
 Powered by Lovstudio。
 
 Latest release: https://github.com/lovstudio/wxmp-cracker-app/releases/latest
 
-微碳是一款跨端桌面 App：用三栏工作台采集、浏览并分析 [wcx](https://github.com/lovstudio/wcx) 抓回来的微信公众号文章。登录扫码在 app 内嵌的 WebviewWindow 里完成，不依赖外部 Chrome。
+微探是一款跨端桌面 App：用三栏工作台采集、浏览并分析 [wcx](https://github.com/lovstudio/wcx) 抓回来的微信公众号文章。登录扫码在 app 内嵌的 WebviewWindow 里完成，不依赖外部 Chrome。
 
 - 侧边栏：所有缓存的公众号（来自 `~/Library/Application Support/wcx/cache.db`）
 - 中间列：选中公众号的文章列表

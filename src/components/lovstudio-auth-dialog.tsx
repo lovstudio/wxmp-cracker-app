@@ -259,7 +259,7 @@ export function LovstudioAuthDialog({
                       {pollingDeviceAuth ? (
                         <Loader2Icon className="size-3.5 animate-spin" />
                       ) : null}
-                      在浏览器确认授权后，微碳会自动完成登录。
+                      在浏览器确认授权后，微探会自动完成登录。
                     </div>
                     <Button
                       className="mt-3 w-full"

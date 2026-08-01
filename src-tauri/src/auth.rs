@@ -701,7 +701,7 @@ mod tests {
     fn logged_out_response_ignores_home_page_without_login_markers() {
         assert!(!looks_like_logged_out_response(
             "https://mp.weixin.qq.com/cgi-bin/home?t=home/index&lang=zh_CN&token=123",
-            "<script>var real_nick_name = '微碳';</script>",
+            "<script>var real_nick_name = '微探';</script>",
         ));
     }
 
