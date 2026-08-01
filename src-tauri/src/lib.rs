@@ -126,6 +126,7 @@ pub fn run() {
             commands::archive_articles_local,
         ])
         .setup(|app| {
+            commands::prewarm_wechat_search_client();
             setup_tray(app)?;
             Ok(())
         })

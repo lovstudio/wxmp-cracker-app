@@ -1,6 +1,8 @@
 use base64::Engine as _;
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, REFERER, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -95,7 +97,10 @@ const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
 const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
 const ACCOUNT_SEARCH_CACHE_MAX_ITEMS: usize = 64;
 const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
-const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const WECHAT_ORIGIN_URL: &str = "https://mp.weixin.qq.com";
+const WECHAT_SEARCH_BIZ_URL: &str = "https://mp.weixin.qq.com/cgi-bin/searchbiz";
+const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
 const WECHAT_ARTICLE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_MAX_BYTES: u64 = 12 * 1024 * 1024;
@@ -118,11 +123,42 @@ struct CachedAccountSearch {
     results: Vec<AccountSearchResult>,
 }
 
+#[derive(Deserialize)]
+struct WechatSearchResponse {
+    #[serde(default)]
+    base_resp: Option<WechatBaseResponse>,
+    #[serde(default)]
+    list: Vec<WechatSearchAccount>,
+}
+
+#[derive(Deserialize)]
+struct WechatBaseResponse {
+    #[serde(default)]
+    ret: i64,
+    #[serde(default)]
+    err_msg: String,
+}
+
+#[derive(Deserialize)]
+struct WechatSearchAccount {
+    #[serde(default)]
+    fakeid: String,
+    #[serde(default)]
+    nickname: String,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    round_head_img: Option<String>,
+}
+
 static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess>>> =
     OnceLock::new();
 static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
     OnceLock::new();
+static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_ARTICLE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
@@ -316,6 +352,11 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
 
     let cache_key = account_search_cache_key(&query);
     if let Some(results) = cached_account_search(&cache_key) {
+        log::info!(
+            "wechat account search cache hit: query_chars={}, results={}",
+            query.chars().count(),
+            results.len()
+        );
         return Ok(results);
     }
 
@@ -324,10 +365,14 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
             return Ok(results);
         }
 
-        // Search and article pagination must pass through the same persistent
-        // wcx request guard. A direct Rust request here used to bypass the
-        // sidecar delay and could hit WeChat immediately before a fetch.
-        let results = search_accounts_via_wcx(&query)?;
+        let started_at = Instant::now();
+        let results = search_accounts_direct(&query)?;
+        log::info!(
+            "wechat account search completed: query_chars={}, results={}, elapsed_ms={}",
+            query.chars().count(),
+            results.len(),
+            started_at.elapsed().as_millis()
+        );
 
         remember_account_search(cache_key, &results);
         Ok(results)
@@ -338,38 +383,127 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
     })?
 }
 
-fn search_accounts_via_wcx(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
-    let wcx = locate_wcx().map_err(|message| CmdError { message })?;
-    let output = Command::new(&wcx)
-        .arg("search-accounts-json")
-        .arg(query)
-        .output()
-        .map_err(|e| CmdError {
-            message: format!("运行 wcx search 失败: {e}"),
-        })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        let detail = first_nonempty_line(&stderr)
-            .or_else(|| first_nonempty_line(&stdout))
-            .unwrap_or_else(|| format!("wcx search 退出码: {}", output.status));
-        return Err(CmdError { message: detail });
+fn search_accounts_direct(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
+    let config = auth::read_config().ok_or_else(|| CmdError {
+        message: "尚未登录，请先扫码登录".to_string(),
+    })?;
+    let token = config.token.trim();
+    let cookie = config.cookie.trim();
+    if token.is_empty() || cookie.is_empty() {
+        return Err(CmdError {
+            message: "尚未登录，请先扫码登录".to_string(),
+        });
     }
 
-    let payload = stdout
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .ok_or_else(|| CmdError {
-            message: "wcx search 没有输出".to_string(),
+    let referer =
+        format!("https://mp.weixin.qq.com/cgi-bin/home?t=home/index&lang=zh_CN&token={token}");
+    let request_url = format!(
+        "{WECHAT_SEARCH_BIZ_URL}?action=search_biz&begin=0&count=5&query={}&token={}&lang=zh_CN&f=json&ajax=1",
+        urlencoding::encode(query),
+        urlencoding::encode(token)
+    );
+    let response = wechat_search_client()?
+        .get(request_url)
+        .header(COOKIE, cookie)
+        .header(REFERER, referer)
+        .send()
+        .map_err(|error| CmdError {
+            message: format!("微信公众号搜索请求失败: {error}"),
         })?;
 
-    serde_json::from_str::<Vec<AccountSearchResult>>(payload).map_err(|e| CmdError {
-        message: format!("解析 wcx search 结果失败: {e}"),
-    })
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(CmdError {
+            message: format!(
+                "微信公众号搜索 HTTP {status}: {}",
+                truncate_for_error(&body, 200)
+            ),
+        });
+    }
+
+    let payload = response
+        .json::<WechatSearchResponse>()
+        .map_err(|error| CmdError {
+            message: format!("解析微信公众号搜索结果失败: {error}"),
+        })?;
+    search_results_from_response(payload)
+}
+
+fn search_results_from_response(
+    payload: WechatSearchResponse,
+) -> Result<Vec<AccountSearchResult>, CmdError> {
+    let ret = payload.base_resp.as_ref().map(|resp| resp.ret).unwrap_or(0);
+    if ret != 0 {
+        let message = payload
+            .base_resp
+            .as_ref()
+            .map(|resp| resp.err_msg.trim())
+            .filter(|message| !message.is_empty())
+            .unwrap_or("unknown");
+        if ret == 200013 {
+            return Err(CmdError {
+                message: format!(
+                    "微信公众号搜索返回频率限制（ret=200013）：{message}。这不代表登录账号异常。"
+                ),
+            });
+        }
+        if matches!(ret, 200003 | 200002 | 200008) {
+            return Err(CmdError {
+                message: format!("认证失败（ret={ret}）：{message}，请重新登录。"),
+            });
+        }
+        return Err(CmdError {
+            message: format!("微信公众号搜索 API 错误（ret={ret}）：{message}"),
+        });
+    }
+
+    Ok(payload
+        .list
+        .into_iter()
+        .map(|account| AccountSearchResult {
+            fakeid: account.fakeid,
+            nickname: account.nickname,
+            alias: account.alias,
+            signature: account.signature,
+            avatar: account.round_head_img,
+        })
+        .filter(|account| !account.fakeid.is_empty() && !account.nickname.is_empty())
+        .collect())
+}
+
+fn wechat_search_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
+    WECHAT_SEARCH_CLIENT
+        .get_or_init(build_wechat_search_client)
+        .as_ref()
+        .map_err(|message| CmdError {
+            message: message.clone(),
+        })
+}
+
+fn build_wechat_search_client() -> Result<reqwest::blocking::Client, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(WECHAT_USER_AGENT));
+    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+    headers.insert(ORIGIN, HeaderValue::from_static(WECHAT_ORIGIN_URL));
+    headers.insert(REFERER, HeaderValue::from_static(WECHAT_REFERER_URL));
+
+    reqwest::blocking::Client::builder()
+        .default_headers(headers)
+        .timeout(WECHAT_DIRECT_SEARCH_TIMEOUT)
+        .build()
+        .map_err(|error| format!("初始化微信公众号搜索客户端失败: {error}"))
+}
+
+pub fn prewarm_wechat_search_client() {
+    let started_at = Instant::now();
+    match wechat_search_client() {
+        Ok(_) => log::info!(
+            "wechat search client initialized: elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+        Err(error) => log::warn!("wechat search client initialization failed: {error}"),
+    }
 }
 
 fn wechat_image_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
@@ -1963,4 +2097,63 @@ pub async fn archive_articles_local(
             message: format!("本地归档任务失败: {e}"),
         })?
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_response_maps_valid_accounts_and_skips_incomplete_rows() {
+        let results = search_results_from_response(WechatSearchResponse {
+            base_resp: Some(WechatBaseResponse {
+                ret: 0,
+                err_msg: String::new(),
+            }),
+            list: vec![
+                WechatSearchAccount {
+                    fakeid: "fake-id".to_string(),
+                    nickname: "深思圈".to_string(),
+                    alias: Some("thinking-circle".to_string()),
+                    signature: Some("保持思考".to_string()),
+                    round_head_img: Some("https://example.com/avatar.jpg".to_string()),
+                },
+                WechatSearchAccount {
+                    fakeid: String::new(),
+                    nickname: "缺少标识".to_string(),
+                    alias: None,
+                    signature: None,
+                    round_head_img: None,
+                },
+            ],
+        })
+        .expect("successful WeChat response should be parsed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].fakeid, "fake-id");
+        assert_eq!(results[0].nickname, "深思圈");
+        assert_eq!(results[0].alias.as_deref(), Some("thinking-circle"));
+        assert_eq!(
+            results[0].avatar.as_deref(),
+            Some("https://example.com/avatar.jpg")
+        );
+    }
+
+    #[test]
+    fn search_response_explains_platform_rate_limit_without_blaming_login() {
+        let result = search_results_from_response(WechatSearchResponse {
+            base_resp: Some(WechatBaseResponse {
+                ret: 200013,
+                err_msg: "freq control".to_string(),
+            }),
+            list: Vec::new(),
+        });
+        let error = match result {
+            Ok(_) => panic!("rate-limited response should be surfaced"),
+            Err(error) => error,
+        };
+
+        assert!(error.message.contains("ret=200013"));
+        assert!(error.message.contains("这不代表登录账号异常"));
+    }
 }

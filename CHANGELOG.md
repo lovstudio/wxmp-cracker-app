@@ -11,6 +11,7 @@
 ### Changed
 
 - Article metadata and body progress now commit incrementally, so completed work remains available after an interrupted fetch.
+- Interactive account search now uses a pre-initialized in-process client with a five-minute cache instead of starting the frozen wcx sidecar for every click.
 - The currently logged-in Official Account now reads its own backend publish history directly; cross-account collection remains isolated on its separate source.
 - Restored account batch collection with current backend parameters and at least 15 seconds between authenticated requests.
 - Standardized article-list requests to the Official Account backend's 20-record page shape, then applies the requested N limit locally.
@@ -19,7 +20,8 @@
 
 ### Fixed
 
-- Routed account search through the same protected wcx request path as article fetching instead of bypassing the sidecar frequency control.
+- Removed the sidecar cold start and article-batch pacing delay from interactive account search, and reduced its loading UI to one progress indicator.
+- Kept account search isolated from article-list pagination so an interactive lookup does not inherit the batch fetch cooldown.
 - An explicit re-login now receives a fresh request guard even when WeChat keeps the same token and cookie values.
 - Local cooldowns and fresh `ret=200013` responses are now labeled separately, so the UI no longer presents a blocked local request as a new WeChat response.
 - Search, own-account publish history, and cross-account article indexes now keep separate cooldown states, so one restricted source no longer blocks the healthy sources.

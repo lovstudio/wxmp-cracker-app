@@ -339,11 +339,7 @@ function AddAccountDialogContent({
                   disabled={!canSearch || actionBusy}
                   onClick={() => void searchAccounts()}
                 >
-                  {searching ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <SearchIcon className="size-4" />
-                  )}
+                  <SearchIcon className="size-4" />
                   搜索
                 </Button>
               </div>
@@ -447,9 +443,7 @@ function AddAccountDialogContent({
                   (hasCurrentResults ? !canConfirmSelection : !canSearch)
                 }
               >
-                {searching ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : hasCurrentResults ? (
+                {hasCurrentResults ? (
                   <CheckIcon className="size-4" />
                 ) : (
                   <SearchIcon className="size-4" />
@@ -494,7 +488,11 @@ function SearchResults({
 }) {
   if (busy) {
     return (
-      <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-border/70 text-sm text-muted-foreground">
+      <div
+        className="flex h-24 items-center justify-center rounded-md border border-dashed border-border/70 text-sm text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
         <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
         正在搜索
       </div>
