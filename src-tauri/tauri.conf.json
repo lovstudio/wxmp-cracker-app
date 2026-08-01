@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "微碳",
+  "productName": "微探",
   "version": "0.3.2",
   "identifier": "ai.lovstudio.wxmp-cracker",
   "build": {
@@ -14,7 +14,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "微碳 - Powered by Lovstudio",
+        "title": "微探 - Powered by Lovstudio",
         "width": 1400,
         "height": 918,
         "center": true,
