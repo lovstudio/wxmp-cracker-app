@@ -199,7 +199,13 @@ impl std::fmt::Display for CmdError {
 
 #[tauri::command]
 pub async fn auth_status() -> auth::LoginStatus {
-    auth::current_status().await
+    let status = auth::current_status().await;
+    if let Some(account) = status.account.as_ref() {
+        if let Err(error) = persist_login_account_metadata(account) {
+            log::warn!("failed to sync logged-in account metadata: {error:#}");
+        }
+    }
+    status
 }
 
 #[tauri::command]
@@ -342,6 +348,28 @@ fn normalize_optional_account_id(account_id: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn persist_login_account_metadata(account: &auth::LoginAccount) -> anyhow::Result<bool> {
+    let Some(fakeid) = login_account_fakeid(account) else {
+        return Ok(false);
+    };
+    let metadata = db::AccountUpsert {
+        fakeid: &fakeid,
+        nickname: account.nickname.as_deref().unwrap_or_default(),
+        alias: account.alias.as_deref(),
+        signature: None,
+        avatar: account.avatar.as_deref(),
+    };
+    db::merge_account_metadata_if_exists(&metadata)
+}
+
+fn login_account_fakeid(account: &auth::LoginAccount) -> Option<String> {
+    let bizuin = account.bizuin.as_deref()?.trim();
+    if bizuin.is_empty() || !bizuin.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(base64::engine::general_purpose::STANDARD.encode(bizuin.as_bytes()))
+}
+
 #[tauri::command]
 pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, CmdError> {
     let query = query.trim().to_string();
@@ -358,11 +386,13 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
             query.chars().count(),
             results.len()
         );
+        persist_existing_account_search_metadata(&results);
         return Ok(results);
     }
 
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(results) = cached_account_search(&cache_key) {
+            persist_existing_account_search_metadata(&results);
             return Ok(results);
         }
 
@@ -375,6 +405,7 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
             started_at.elapsed().as_millis()
         );
 
+        persist_existing_account_search_metadata(&results);
         remember_account_search(cache_key, &results);
         Ok(results)
     })
@@ -382,6 +413,24 @@ pub async fn search_accounts(query: String) -> Result<Vec<AccountSearchResult>, 
     .map_err(|e| CmdError {
         message: format!("公众号搜索任务失败: {e}"),
     })?
+}
+
+fn persist_existing_account_search_metadata(accounts: &[AccountSearchResult]) {
+    for account in accounts {
+        let metadata = db::AccountUpsert {
+            fakeid: &account.fakeid,
+            nickname: &account.nickname,
+            alias: account.alias.as_deref(),
+            signature: account.signature.as_deref(),
+            avatar: account.avatar.as_deref(),
+        };
+        if let Err(error) = db::merge_account_metadata_if_exists(&metadata) {
+            log::warn!(
+                "failed to refresh cached account metadata for {}: {error:#}",
+                account.fakeid
+            );
+        }
+    }
 }
 
 fn search_accounts_direct(query: &str) -> Result<Vec<AccountSearchResult>, CmdError> {
@@ -2211,6 +2260,23 @@ mod tests {
         assert_eq!(
             wechat_pace_guard_key(&config),
             "wechat-session:dd4a9375d43c1ed01c42:pace"
+        );
+    }
+
+    #[test]
+    fn login_bizuin_maps_to_the_cached_account_fakeid() {
+        let account = auth::LoginAccount {
+            nickname: Some("手工川".to_string()),
+            username: Some("gh_example".to_string()),
+            avatar: Some("https://wx.qlogo.cn/avatar/64".to_string()),
+            alias: None,
+            service_type: Some("1".to_string()),
+            bizuin: Some("3869894872".to_string()),
+        };
+
+        assert_eq!(
+            login_account_fakeid(&account).as_deref(),
+            Some("Mzg2OTg5NDg3Mg==")
         );
     }
 }

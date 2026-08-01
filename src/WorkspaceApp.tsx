@@ -217,6 +217,10 @@ function WorkspaceApp() {
       setAuthExpired(expired)
       setLastAuthCheckAt(checkedAt)
 
+      if (sessionActive && s.account?.avatar) {
+        await refreshAccounts()
+      }
+
       if (expired) {
         const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
         if (options.notifyExpired || !authExpiredNotifiedRef.current) {
@@ -251,7 +255,7 @@ function WorkspaceApp() {
       authRefreshInFlightRef.current = false
       setAuthChecking(false)
     }
-  }, [])
+  }, [refreshAccounts])
 
   const checkWechatSession = useCallback(
     async (toastOnSuccess = false) => {

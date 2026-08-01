@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Account avatar refreshes now backfill missing images from the logged-in profile or search results, while sparse imports and collection updates preserve previously stored profile metadata.
 - Removed the sidecar cold start and article-batch pacing delay from interactive account search, and reduced its loading UI to one progress indicator.
 - Kept account search isolated from article-list pagination so an interactive lookup does not inherit the batch fetch cooldown.
 - An explicit re-login now receives a fresh request guard even when WeChat keeps the same token and cookie values.

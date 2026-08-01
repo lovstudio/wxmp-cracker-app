@@ -128,6 +128,37 @@ pub struct ArticleUpsert<'a> {
     pub content_md: Option<&'a str>,
 }
 
+pub fn merge_account_metadata_if_exists(account: &AccountUpsert<'_>) -> Result<bool> {
+    let conn = open()?;
+    merge_account_metadata(&conn, account)
+}
+
+fn merge_account_metadata(conn: &Connection, account: &AccountUpsert<'_>) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE accounts
+         SET nickname = COALESCE(NULLIF(TRIM(?2), ''), nickname),
+             alias = COALESCE(NULLIF(TRIM(?3), ''), alias),
+             signature = COALESCE(NULLIF(TRIM(?4), ''), signature),
+             round_head_img = COALESCE(NULLIF(TRIM(?5), ''), round_head_img),
+             updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+         WHERE fakeid = ?1
+           AND (
+                (NULLIF(TRIM(?2), '') IS NOT NULL AND nickname <> TRIM(?2))
+             OR (NULLIF(TRIM(?3), '') IS NOT NULL AND COALESCE(alias, '') <> TRIM(?3))
+             OR (NULLIF(TRIM(?4), '') IS NOT NULL AND COALESCE(signature, '') <> TRIM(?4))
+             OR (NULLIF(TRIM(?5), '') IS NOT NULL AND COALESCE(round_head_img, '') <> TRIM(?5))
+           )",
+        (
+            account.fakeid,
+            account.nickname,
+            account.alias,
+            account.signature,
+            account.avatar,
+        ),
+    )?;
+    Ok(changed > 0)
+}
+
 pub fn list_accounts() -> Result<Vec<Account>> {
     let conn = open()?;
     let mut stmt = conn.prepare(
@@ -491,25 +522,7 @@ pub fn upsert_account_and_article(
     let mut conn = open()?;
     let tx = conn.transaction()?;
 
-    tx.execute(
-        "INSERT INTO accounts
-            (fakeid, nickname, alias, signature, round_head_img, updated_at)
-         VALUES
-            (?1, ?2, ?3, ?4, ?5, CAST(strftime('%s', 'now') AS INTEGER))
-         ON CONFLICT(fakeid) DO UPDATE SET
-            nickname = excluded.nickname,
-            alias = excluded.alias,
-            signature = excluded.signature,
-            round_head_img = excluded.round_head_img,
-            updated_at = excluded.updated_at",
-        (
-            account.fakeid,
-            account.nickname,
-            account.alias,
-            account.signature,
-            account.avatar,
-        ),
-    )?;
+    upsert_account(&tx, account)?;
 
     tx.execute(
         "INSERT INTO articles
@@ -548,6 +561,32 @@ pub fn upsert_account_and_article(
     Ok(())
 }
 
+fn upsert_account(conn: &Connection, account: &AccountUpsert<'_>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO accounts
+            (fakeid, nickname, alias, signature, round_head_img, updated_at)
+         VALUES
+            (?1, ?2, ?3, ?4, ?5, CAST(strftime('%s', 'now') AS INTEGER))
+         ON CONFLICT(fakeid) DO UPDATE SET
+            nickname = COALESCE(NULLIF(TRIM(excluded.nickname), ''), accounts.nickname),
+            alias = COALESCE(NULLIF(TRIM(excluded.alias), ''), accounts.alias),
+            signature = COALESCE(NULLIF(TRIM(excluded.signature), ''), accounts.signature),
+            round_head_img = COALESCE(
+                NULLIF(TRIM(excluded.round_head_img), ''),
+                accounts.round_head_img
+            ),
+            updated_at = excluded.updated_at",
+        (
+            account.fakeid,
+            account.nickname,
+            account.alias,
+            account.signature,
+            account.avatar,
+        ),
+    )?;
+    Ok(())
+}
+
 pub fn article_fetch_limit(aid: &str, fakeid: &str) -> Result<Option<u32>> {
     let conn = open()?;
     let mut stmt = conn.prepare(
@@ -568,4 +607,103 @@ pub fn article_fetch_limit(aid: &str, fakeid: &str) -> Result<Option<u32>> {
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account_table() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                fakeid TEXT PRIMARY KEY,
+                nickname TEXT NOT NULL,
+                alias TEXT,
+                signature TEXT,
+                round_head_img TEXT,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn sparse_account_upsert_preserves_existing_avatar() {
+        let conn = account_table();
+        let complete = AccountUpsert {
+            fakeid: "account-id",
+            nickname: "深思圈",
+            alias: Some("Deep_Think_Circle"),
+            signature: Some("关注深思圈"),
+            avatar: Some("https://mmbiz.qpic.cn/avatar.png"),
+        };
+        upsert_account(&conn, &complete).unwrap();
+
+        let sparse = AccountUpsert {
+            fakeid: "account-id",
+            nickname: "深思圈",
+            alias: None,
+            signature: Some(""),
+            avatar: Some(""),
+        };
+        upsert_account(&conn, &sparse).unwrap();
+
+        let row = conn
+            .query_row(
+                "SELECT alias, signature, round_head_img FROM accounts WHERE fakeid = ?1",
+                ["account-id"],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "Deep_Think_Circle");
+        assert_eq!(row.1, "关注深思圈");
+        assert_eq!(row.2, "https://mmbiz.qpic.cn/avatar.png");
+    }
+
+    #[test]
+    fn metadata_merge_fills_a_missing_avatar_without_blank_deletions() {
+        let conn = account_table();
+        conn.execute(
+            "INSERT INTO accounts
+                (fakeid, nickname, alias, signature, round_head_img, updated_at)
+             VALUES (?1, ?2, NULL, NULL, '', 1)",
+            ("account-id", "手工川"),
+        )
+        .unwrap();
+
+        let refresh = AccountUpsert {
+            fakeid: "account-id",
+            nickname: "手工川",
+            alias: None,
+            signature: None,
+            avatar: Some("https://wx.qlogo.cn/avatar/64"),
+        };
+        assert!(merge_account_metadata(&conn, &refresh).unwrap());
+
+        let sparse = AccountUpsert {
+            fakeid: "account-id",
+            nickname: "手工川",
+            alias: None,
+            signature: None,
+            avatar: Some(""),
+        };
+        assert!(!merge_account_metadata(&conn, &sparse).unwrap());
+
+        let avatar: String = conn
+            .query_row(
+                "SELECT round_head_img FROM accounts WHERE fakeid = ?1",
+                ["account-id"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(avatar, "https://wx.qlogo.cn/avatar/64");
+    }
 }
