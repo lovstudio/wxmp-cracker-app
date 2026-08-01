@@ -9,6 +9,13 @@ edition = "2021"
 name = "wxmp_cracker_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The macOS Dock uses the raw executable name while running `tauri dev`.
+# Keep the crate package identifier stable, but give the user-facing binary
+# the same name as the bundled app.
+[[bin]]
+name = "微探"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
