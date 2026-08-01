@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
@@ -95,6 +95,8 @@ struct ArticlePageMetadata {
 
 const FETCH_ACCOUNT_PROGRESS_EVENT: &str = "fetch-account://progress";
 const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
+const FETCH_DAEMON_READY_PREFIX: &str = "__WXMP_FETCH_DAEMON_READY__";
+const FETCH_DAEMON_RESULT_PREFIX: &str = "__WXMP_FETCH_DAEMON_RESULT__";
 const ACCOUNT_SEARCH_CACHE_TTL: Duration = Duration::from_secs(300);
 const ACCOUNT_SEARCH_CACHE_MAX_ITEMS: usize = 64;
 const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
@@ -116,6 +118,25 @@ struct ActiveFetchProcess {
 struct ActiveFetchGuard {
     fakeid: String,
     pid: u32,
+}
+
+struct WcxFetchDaemon {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+#[derive(Deserialize)]
+struct WcxFetchDaemonResult {
+    request_id: String,
+    status: String,
+    #[serde(default)]
+    error: String,
+}
+
+enum WcxFetchDaemonError {
+    Fetch(CmdError),
+    Unavailable(String),
 }
 
 #[derive(Clone)]
@@ -157,6 +178,7 @@ struct WechatSearchAccount {
 static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess>>> =
     OnceLock::new();
 static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static WCX_FETCH_DAEMON: OnceLock<Mutex<Option<WcxFetchDaemon>>> = OnceLock::new();
 static ACCOUNT_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedAccountSearch>>> =
     OnceLock::new();
 static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
@@ -548,6 +570,29 @@ pub fn prewarm_wechat_search_client() {
     }
 }
 
+pub fn prewarm_wcx_fetch_daemon() {
+    thread::spawn(|| {
+        let started_at = Instant::now();
+        let mut daemon = wcx_fetch_daemon()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if daemon.is_some() {
+            return;
+        }
+        match spawn_wcx_fetch_daemon() {
+            Ok(process) => {
+                let pid = process.child.id();
+                *daemon = Some(process);
+                log::info!(
+                    "wcx fetch daemon prewarmed: pid={pid}, elapsed_ms={}",
+                    started_at.elapsed().as_millis()
+                );
+            }
+            Err(error) => log::warn!("wcx fetch daemon prewarm failed: {error}"),
+        }
+    });
+}
+
 fn wechat_image_client() -> Result<&'static reqwest::blocking::Client, CmdError> {
     WECHAT_IMAGE_CLIENT
         .get_or_init(build_wechat_image_client)
@@ -808,22 +853,35 @@ pub async fn fetch_selected_account(
             ),
         );
 
-        let wcx = locate_wcx().map_err(|message| CmdError { message })?;
-        let account_json = serde_json::to_string(&account).map_err(|e| CmdError {
-            message: format!("序列化公众号选择失败: {e}"),
-        })?;
-        let mut cmd = Command::new(&wcx);
-        cmd.arg("fetch-selected-account-json")
-            .arg(account_json)
-            .arg(limit.to_string())
-            .arg(if with_content { "1" } else { "0" })
-            .arg("--mode")
-            .arg(&mode);
-        if let Some(date) = audit_date {
-            cmd.arg("--audit-date").arg(date);
+        match run_wcx_fetch_daemon(
+            &app,
+            &account,
+            limit,
+            with_content,
+            &mode,
+            audit_date.as_deref(),
+        ) {
+            Ok(result) => Ok(result),
+            Err(WcxFetchDaemonError::Fetch(error)) => Err(error),
+            Err(WcxFetchDaemonError::Unavailable(reason)) => {
+                log::warn!("wcx fetch daemon unavailable, using one-shot process: {reason}");
+                let wcx = locate_wcx().map_err(|message| CmdError { message })?;
+                let account_json = serde_json::to_string(&account).map_err(|e| CmdError {
+                    message: format!("序列化公众号选择失败: {e}"),
+                })?;
+                let mut cmd = Command::new(&wcx);
+                cmd.arg("fetch-selected-account-json")
+                    .arg(account_json)
+                    .arg(limit.to_string())
+                    .arg(if with_content { "1" } else { "0" })
+                    .arg("--mode")
+                    .arg(&mode);
+                if let Some(date) = audit_date {
+                    cmd.arg("--audit-date").arg(date);
+                }
+                run_fetch_progress_command(&app, &account, cmd)
+            }
         }
-
-        run_fetch_progress_command(&app, &account, cmd)
     })
     .await
     .map_err(|e| CmdError {
@@ -1630,6 +1688,22 @@ fn locate_wcx() -> Result<PathBuf, String> {
             continue;
         }
 
+        // Known filesystem locations do not need an executable smoke test.
+        // The bundled PyInstaller sidecar is a one-file binary; invoking
+        // `--version` would unpack and initialize the full Python runtime and
+        // add roughly one cold start before the real fetch even begins.
+        if candidate.is_absolute() || candidate.components().count() > 1 {
+            match fs::metadata(&candidate) {
+                Ok(metadata) if metadata.is_file() => {
+                    remember_wcx_path(&candidate);
+                    return Ok(candidate);
+                }
+                Ok(_) => failures.push(format!("{}: 不是文件", candidate.display())),
+                Err(error) => failures.push(format!("{}: {error}", candidate.display())),
+            }
+            continue;
+        }
+
         match Command::new(&candidate).arg("--version").output() {
             Ok(output) if output.status.success() => {
                 remember_wcx_path(&candidate);
@@ -1862,6 +1936,218 @@ fn run_fetch_progress_command(
         stdout: stdout_text,
         stderr: stderr_text,
     })
+}
+
+fn wcx_fetch_daemon() -> &'static Mutex<Option<WcxFetchDaemon>> {
+    WCX_FETCH_DAEMON.get_or_init(|| Mutex::new(None))
+}
+
+fn spawn_wcx_fetch_daemon() -> Result<WcxFetchDaemon, String> {
+    let wcx = locate_wcx()?;
+    let mut child = Command::new(&wcx)
+        .arg("serve-fetch-json")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("启动 wcx 常驻抓取引擎失败: {error}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "wcx 常驻抓取引擎缺少标准输入".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "wcx 常驻抓取引擎缺少标准输出".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "wcx 常驻抓取引擎缺少错误输出".to_string())?;
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if !line.trim().is_empty() {
+                log::warn!("wcx fetch daemon: {line}");
+            }
+        }
+    });
+
+    let mut daemon = WcxFetchDaemon {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+    };
+    let mut startup_output = Vec::new();
+    loop {
+        let mut line = String::new();
+        let read = daemon
+            .stdout
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 wcx 常驻抓取引擎启动状态失败: {error}"))?;
+        if read == 0 {
+            let status = daemon
+                .child
+                .wait()
+                .map(|status| status.to_string())
+                .unwrap_or_else(|error| error.to_string());
+            let detail = startup_output.join("；");
+            return Err(if detail.is_empty() {
+                format!("wcx 常驻抓取引擎提前退出: {status}")
+            } else {
+                format!("wcx 常驻抓取引擎提前退出: {status}，{detail}")
+            });
+        }
+        let line = line.trim();
+        if line == FETCH_DAEMON_READY_PREFIX {
+            return Ok(daemon);
+        }
+        if !line.is_empty() {
+            startup_output.push(line.to_string());
+            if startup_output.len() > 5 {
+                startup_output.remove(0);
+            }
+        }
+    }
+}
+
+fn run_wcx_fetch_daemon(
+    app: &AppHandle,
+    account: &AccountSearchResult,
+    limit: u32,
+    with_content: bool,
+    mode: &str,
+    audit_date: Option<&str>,
+) -> Result<FetchAccountResult, WcxFetchDaemonError> {
+    let mut slot = wcx_fetch_daemon()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let needs_restart = match slot.as_mut() {
+        Some(daemon) => daemon
+            .child
+            .try_wait()
+            .map_err(|error| {
+                WcxFetchDaemonError::Unavailable(format!("检查 wcx 常驻抓取引擎状态失败: {error}"))
+            })?
+            .is_some(),
+        None => true,
+    };
+    if needs_restart {
+        *slot = Some(spawn_wcx_fetch_daemon().map_err(WcxFetchDaemonError::Unavailable)?);
+    }
+
+    let daemon = slot.as_mut().expect("wcx fetch daemon initialized");
+    let request_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .to_string();
+    let request = serde_json::json!({
+        "request_id": request_id,
+        "account": account,
+        "limit": limit,
+        "with_content": with_content,
+        "mode": mode,
+        "audit_date": audit_date,
+    });
+    writeln!(daemon.stdin, "{request}")
+        .and_then(|_| daemon.stdin.flush())
+        .map_err(|error| {
+            WcxFetchDaemonError::Unavailable(format!("发送 wcx 常驻抓取请求失败: {error}"))
+        })?;
+
+    let (_active_fetch, cancel_requested) = register_active_fetch(account, daemon.child.id());
+    let mut stdout_text = String::new();
+    let mut last_progress: Option<FetchAccountProgress> = None;
+    loop {
+        let mut line = String::new();
+        let read = daemon.stdout.read_line(&mut line).map_err(|error| {
+            WcxFetchDaemonError::Fetch(CmdError {
+                message: format!("读取 wcx 常驻抓取输出失败: {error}"),
+            })
+        })?;
+        if read == 0 {
+            let cancelled = cancel_requested.load(Ordering::SeqCst);
+            *slot = None;
+            let message = if cancelled {
+                "当前抓取任务已打断".to_string()
+            } else {
+                "wcx 常驻抓取引擎意外结束".to_string()
+            };
+            emit_fetch_progress(
+                app,
+                fetch_progress(
+                    account,
+                    if cancelled { "cancel" } else { "error" },
+                    if cancelled { "warning" } else { "error" },
+                    &message,
+                    None,
+                    None,
+                    None,
+                ),
+            );
+            return Err(WcxFetchDaemonError::Fetch(CmdError { message }));
+        }
+
+        let trimmed = line.trim();
+        if let Some(payload) = trimmed.strip_prefix(FETCH_PROGRESS_PREFIX) {
+            match serde_json::from_str::<FetchAccountProgress>(payload.trim()) {
+                Ok(progress) => {
+                    last_progress = Some(progress.clone());
+                    emit_fetch_progress(app, progress);
+                }
+                Err(error) => log::warn!("invalid daemon fetch progress payload: {error}"),
+            }
+            stdout_text.push_str(&line);
+            continue;
+        }
+
+        if let Some(payload) = trimmed.strip_prefix(FETCH_DAEMON_RESULT_PREFIX) {
+            let result =
+                serde_json::from_str::<WcxFetchDaemonResult>(payload.trim()).map_err(|error| {
+                    WcxFetchDaemonError::Fetch(CmdError {
+                        message: format!("解析 wcx 常驻抓取结果失败: {error}"),
+                    })
+                })?;
+            if result.request_id != request_id {
+                log::warn!(
+                    "ignored stale wcx fetch daemon result: expected={request_id}, actual={}",
+                    result.request_id
+                );
+                continue;
+            }
+            if result.status == "ok" {
+                return Ok(FetchAccountResult {
+                    stdout: stdout_text,
+                    stderr: String::new(),
+                });
+            }
+
+            let detail = if result.error.trim().is_empty() {
+                "wcx 抓取任务失败".to_string()
+            } else {
+                result.error
+            };
+            let error_progress = match last_progress {
+                Some(last) => fetch_progress(
+                    account,
+                    &last.stage,
+                    "error",
+                    &detail,
+                    last.current,
+                    last.total,
+                    last.title,
+                ),
+                None => fetch_progress(account, "error", "error", &detail, None, None, None),
+            };
+            emit_fetch_progress(app, error_progress);
+            return Err(WcxFetchDaemonError::Fetch(CmdError { message: detail }));
+        }
+
+        if !trimmed.is_empty() && trimmed != FETCH_DAEMON_READY_PREFIX {
+            stdout_text.push_str(&line);
+        }
+    }
 }
 
 fn active_fetch_processes() -> &'static Mutex<HashMap<String, ActiveFetchProcess>> {
