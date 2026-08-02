@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -19,7 +22,7 @@ jobs:
     steps:
       - name: Resolve tag
         id: tag
-        run: echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
