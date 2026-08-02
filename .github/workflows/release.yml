@@ -375,4 +375,5 @@ jobs:
           gh release edit "${{ needs.create-release.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --draft=false \
-            --prerelease=false
+            --prerelease=false \
+            --latest
