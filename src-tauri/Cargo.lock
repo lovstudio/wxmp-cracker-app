@@ -6842,6 +6842,7 @@ dependencies = [
  "keyring",
  "log",
  "minisign-verify",
+ "objc2-foundation",
  "qbsdiff",
  "regex",
  "reqwest",
