@@ -307,9 +307,9 @@ jobs:
             local delta_path="$WORK_DIR/$delta_name"
             local full_size delta_size signature checksum
 
-            gh release download "$PREVIOUS_TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber
-            mv "$new_archive" "$old_archive"
-            gh release download "$TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber
+            gh release download "$PREVIOUS_TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber || return 1
+            mv "$new_archive" "$old_archive" || return 1
+            gh release download "$TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber || return 1
 
             node scripts/generate-macos-delta.mjs \
               --from-version "${PREVIOUS_TAG#v}" \
@@ -317,19 +317,19 @@ jobs:
               --target "$target" \
               --from-archive "$old_archive" \
               --to-archive "$new_archive" \
-              --output "$delta_path"
+              --output "$delta_path" || return 1
 
-            full_size="$(stat --format=%s "$new_archive")"
-            delta_size="$(stat --format=%s "$delta_path")"
+            full_size="$(stat --format=%s "$new_archive")" || return 1
+            delta_size="$(stat --format=%s "$delta_path")" || return 1
             if [ "$delta_size" -ge "$full_size" ]; then
               echo "Skipping $target delta because it is not smaller than the full updater bundle."
               return 0
             fi
 
-            bun tauri signer sign "$delta_path"
-            signature="$(cat "$delta_path.sig")"
-            checksum="$(sha256sum "$delta_path" | awk '{print $1}')"
-            gh release upload "$TAG" "$delta_path" "$delta_path.sig" --repo "$REPO" --clobber
+            bun tauri signer sign "$delta_path" || return 1
+            signature="$(cat "$delta_path.sig")" || return 1
+            checksum="$(sha256sum "$delta_path" | awk '{print $1}')" || return 1
+            gh release upload "$TAG" "$delta_path" "$delta_path.sig" --repo "$REPO" --clobber || return 1
             jq \
               --arg from_version "${PREVIOUS_TAG#v}" \
               --arg target "$target" \
@@ -338,12 +338,18 @@ jobs:
               --arg sha256 "$checksum" \
               --argjson size "$delta_size" \
               '.deltas += [{fromVersion: $from_version, target: $target, url: $url, size: $size, sha256: $sha256, signature: $signature}]' \
-              "$DELTA_FEED" > "$DELTA_FEED.next"
-            mv "$DELTA_FEED.next" "$DELTA_FEED"
+              "$DELTA_FEED" > "$DELTA_FEED.next" || return 1
+            mv "$DELTA_FEED.next" "$DELTA_FEED" || return 1
           }
 
-          create_delta "darwin-aarch64" "wxmp-cracker-app-${VERSION}-darwin-aarch64.app.tar.gz"
-          create_delta "darwin-x86_64" "wxmp-cracker-app-${VERSION}-darwin-x64.app.tar.gz"
+          # Delta packages are an optimization only. The signed full updater
+          # manifest above stays publishable if a delta cannot be produced.
+          if ! create_delta "darwin-aarch64" "wxmp-cracker-app-${VERSION}-darwin-aarch64.app.tar.gz"; then
+            echo "Skipping darwin-aarch64 delta; clients will use the full updater bundle."
+          fi
+          if ! create_delta "darwin-x86_64" "wxmp-cracker-app-${VERSION}-darwin-x64.app.tar.gz"; then
+            echo "Skipping darwin-x86_64 delta; clients will use the full updater bundle."
+          fi
           bun tauri signer sign "$DELTA_FEED"
           gh release upload "$TAG" "$DELTA_FEED#latest-deltas.json" "$DELTA_FEED.sig#latest-deltas.json.sig" --repo "$REPO" --clobber
 
