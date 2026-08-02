@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.7 - 2026-08-02
+
+### Added
+
+- Added signed macOS incremental updates for Apple Silicon and Intel builds. Release automation creates an architecture-specific delta from the previous stable release when it is smaller than the complete updater bundle.
+- Added integrity checks for the signed delta manifest, delta archive, individual patched files, and the completed macOS app bundle before installation.
+
+### Changed
+
+- Desktop updates now prefer a matching incremental package and retain the existing signed full-package updater whenever a delta is unavailable or does not validate.
+
 ## 0.3.6 - 2026-08-01
 
 ### Added
