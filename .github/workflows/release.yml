@@ -231,7 +231,8 @@ jobs:
             # GitHub can take a short time to expose assets uploaded by the
             # matrix jobs to the release-download endpoint.
             for attempt in $(seq 1 20); do
-              if gh release download "$TAG" --repo "$REPO" --pattern "$asset" --dir "$WORK_DIR" --clobber; then
+              if gh release download "$TAG" --repo "$REPO" --pattern "$asset" --dir "$WORK_DIR" --clobber \
+                && [ -f "$WORK_DIR/$asset" ]; then
                 tr -d '\r\n' < "$WORK_DIR/$asset"
                 return 0
               fi
