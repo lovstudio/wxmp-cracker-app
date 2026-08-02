@@ -18,6 +18,7 @@ mod archive;
 mod auth;
 mod commands;
 mod db;
+mod delta_updater;
 mod github;
 mod license;
 mod sync;
@@ -30,6 +31,22 @@ const DEV_SERVER_PORT: u16 = 4382;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+async fn check_delta_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, delta_updater::DeltaUpdaterState>,
+) -> Result<Option<delta_updater::DeltaUpdateMetadata>, String> {
+    delta_updater::check(app, state.inner()).await
+}
+
+#[tauri::command]
+async fn install_delta_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, delta_updater::DeltaUpdaterState>,
+) -> Result<(), String> {
+    delta_updater::install(app, state.inner()).await
 }
 
 /// Sends every external http(s) link to the system browser EXCEPT for the
@@ -310,10 +327,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(delta_updater::DeltaUpdaterState::default())
         .plugin(external_navigation_plugin())
         .menu(build_application_menu)
         .invoke_handler(tauri::generate_handler![
             greet,
+            check_delta_update,
+            install_delta_update,
             commands::auth_status,
             commands::open_login,
             commands::auth_logout,
