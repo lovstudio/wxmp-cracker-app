@@ -6,6 +6,7 @@ import {
   GaugeIcon,
   GitForkIcon,
   InfoIcon,
+  ListChecksIcon,
   Loader2Icon,
   LogInIcon,
   MoonIcon,
@@ -49,8 +50,10 @@ export type WorkspaceTabId =
 
 interface TopBarProps {
   activeTab: WorkspaceTabId
+  setupProgress?: number
   onOpenLicenseAdmin: () => void
   onOpenLovstudioLogin: () => void
+  onOpenSetup: () => void
   onTabChange: (tab: WorkspaceTabId) => void
 }
 
@@ -71,8 +74,10 @@ const workspaceTabs = [
 
 export function TopBar({
   activeTab,
+  setupProgress,
   onOpenLicenseAdmin,
   onOpenLovstudioLogin,
+  onOpenSetup,
   onTabChange,
 }: TopBarProps) {
   const { isLoading: authLoading, user } = useAuth()
@@ -108,6 +113,18 @@ export function TopBar({
       </nav>
       {user ? (
         <div className="ml-auto flex items-center gap-3">
+          {typeof setupProgress === "number" && setupProgress < 3 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="hidden border-border/70 bg-card/70 text-foreground shadow-sm sm:inline-flex"
+              onClick={onOpenSetup}
+            >
+              <ListChecksIcon className="size-4" />
+              准备进度 {setupProgress}/3
+            </Button>
+          ) : null}
           <ResourceConditions />
           <Tooltip>
             <TooltipTrigger asChild>
@@ -159,7 +176,7 @@ export function TopBar({
           ) : (
             <LogInIcon className="size-4" />
           )}
-          登录
+          登录 Lovstudio
         </Button>
       )}
     </header>
