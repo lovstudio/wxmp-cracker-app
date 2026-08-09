@@ -8,6 +8,7 @@ import {
   InfoIcon,
   Loader2Icon,
   LogInIcon,
+  MoreHorizontalIcon,
   MoonIcon,
   NetworkIcon,
   PenLineIcon,
@@ -17,6 +18,14 @@ import {
 } from "lucide-react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
   TooltipContent,
@@ -35,8 +44,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
+  type KeyboardEvent,
 } from "react"
 
 export type WorkspaceTabId =
@@ -79,13 +90,44 @@ export function TopBar({
   const { theme, setTheme } = useTheme()
   const isDark = theme === "dark"
   const nextTheme = isDark ? "light" : "dark"
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  const handleTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) => {
+    const nextIndex =
+      event.key === "ArrowRight"
+        ? (index + 1) % workspaceTabs.length
+        : event.key === "ArrowLeft"
+          ? (index - 1 + workspaceTabs.length) % workspaceTabs.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? workspaceTabs.length - 1
+              : null
+
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    onTabChange(workspaceTabs[nextIndex].id)
+    requestAnimationFrame(() => tabRefs.current[nextIndex]?.focus())
+  }
 
   return (
-    <header className="top-bar sticky top-0 z-10 flex h-(--header-height) shrink-0 items-center gap-3 border-b border-border/70 px-4 backdrop-blur-xl">
-      <SidebarTrigger className="-ml-1 border border-border/70 bg-card/70 text-foreground shadow-sm" />
-      <nav className="workspace-tab-nav min-w-0" aria-label="账号工作区">
-        <div className="workspace-tab-list" role="tablist">
-          {workspaceTabs.map((tab) => {
+    <header className="top-bar sticky top-0 z-10 flex h-(--header-height) shrink-0 items-center gap-2 border-b border-border/70 px-3 backdrop-blur-xl sm:gap-3 sm:px-4">
+      <SidebarTrigger
+        aria-label="展开或收起侧栏"
+        className="-ml-1 border border-border/70 bg-card/70 text-foreground shadow-sm"
+      />
+      <div className="topbar-rule hidden sm:block" aria-hidden="true" />
+      <nav className="workspace-tab-nav min-w-0 flex-1" aria-label="账号工作区">
+        <div
+          className="workspace-tab-list"
+          role="tablist"
+          aria-orientation="horizontal"
+        >
+          {workspaceTabs.map((tab, index) => {
             const Icon = tab.icon
             const selected = activeTab === tab.id
 
@@ -95,9 +137,14 @@ export function TopBar({
                 type="button"
                 role="tab"
                 aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
                 data-active={selected}
                 className="workspace-tab"
+                ref={(element) => {
+                  tabRefs.current[index] = element
+                }}
                 onClick={() => onTabChange(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
               >
                 <Icon className="size-3.5" />
                 <span>{tab.label}</span>
@@ -107,44 +154,13 @@ export function TopBar({
         </div>
       </nav>
       {user ? (
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           <ResourceConditions />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                aria-label="打开授权与额度管理"
-                className="border-border/70 bg-card/70 text-foreground shadow-sm"
-                onClick={onOpenLicenseAdmin}
-              >
-                <ShieldCheckIcon className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">授权与额度管理</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                aria-label={isDark ? "切换浅色主题" : "切换深色主题"}
-                className="border-border/70 bg-card/70 text-foreground shadow-sm"
-                onClick={() => setTheme(nextTheme)}
-              >
-                {isDark ? (
-                  <SunIcon className="size-4" />
-                ) : (
-                  <MoonIcon className="size-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isDark ? "切换浅色主题" : "切换深色主题"}
-            </TooltipContent>
-          </Tooltip>
+          <WorkspaceActions
+            isDark={isDark}
+            onOpenLicenseAdmin={onOpenLicenseAdmin}
+            onSetTheme={() => setTheme(nextTheme)}
+          />
         </div>
       ) : (
         <Button
@@ -163,6 +179,51 @@ export function TopBar({
         </Button>
       )}
     </header>
+  )
+}
+
+function WorkspaceActions({
+  isDark,
+  onOpenLicenseAdmin,
+  onSetTheme,
+}: {
+  isDark: boolean
+  onOpenLicenseAdmin: () => void
+  onSetTheme: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="打开工作区选项"
+              className="topbar-action-button"
+            >
+              <MoreHorizontalIcon className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">更多工作区选项</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" side="bottom" className="w-56">
+        <DropdownMenuLabel className="px-2 text-xs text-muted-foreground">
+          工作区选项
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onOpenLicenseAdmin}>
+          <ShieldCheckIcon />
+          授权与额度管理
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onSetTheme}>
+          {isDark ? <SunIcon /> : <MoonIcon />}
+          {isDark ? "切换浅色主题" : "切换深色主题"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -237,7 +298,11 @@ function ResourceConditions() {
   if (!user) return null
 
   return (
-    <div className="hidden min-w-0 items-center gap-2 lg:flex">
+    <div
+      className="topbar-resource-group hidden min-w-0 items-center gap-1.5 lg:flex"
+      role="group"
+      aria-label="当前资源状态"
+    >
       <ResourcePill
         icon={GaugeIcon}
         label="频率"
@@ -309,7 +374,11 @@ function ResourcePill({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className="topbar-pill max-w-[148px]" role="status">
+        <div
+          className="topbar-pill max-w-[148px]"
+          role="status"
+          aria-label={`${label}：${value}`}
+        >
           {loading ? (
             <Loader2Icon className="size-3.5 animate-spin" />
           ) : (
