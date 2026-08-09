@@ -83,12 +83,7 @@ import {
   WechatSelfCapabilityPreferenceControl,
 } from "@/components/wechat-capability-settings"
 import { QuotaSettingsPanel } from "@/components/quota-settings-panel"
-import {
-  api,
-  type Account,
-  type ArticleSummary,
-  type LoginAccount,
-} from "@/lib/api"
+import { api, type Account, type LoginAccount } from "@/lib/api"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
 import { createPortal } from "react-dom"
@@ -1623,14 +1618,8 @@ function getAccountContextMenuEstimatedHeight(archived: boolean) {
   )
 }
 
-interface AccountLocalArticle {
-  article: ArticleSummary
-  path: string
-  exists: boolean
-}
-
 async function copyAccountBasicInfo(account: Account) {
-  toast.info(`正在整理 ${account.nickname} 的文章地址…`)
+  toast.info(`正在整理 ${account.nickname} 的归档信息…`)
 
   try {
     const [articles, cacheDbPath] = await Promise.all([
@@ -1638,36 +1627,10 @@ async function copyAccountBasicInfo(account: Account) {
       api.cacheDbPath(),
     ])
     const downloadedArticles = articles.filter((article) => article.has_content)
-    const archiveSummary = downloadedArticles.length
-      ? await api.archiveArticlesLocal({ account_fakeid: account.fakeid })
-      : null
-
-    const localFileResults = await Promise.allSettled(
-      downloadedArticles.map(
-        async (article): Promise<AccountLocalArticle | null> => {
-          const file = await api.articleLocalFile(article.aid)
-          if (!file?.path) return null
-          return { article, path: file.path, exists: file.exists }
-        }
-      )
-    )
-    const localArticles = localFileResults.flatMap((result) =>
-      result.status === "fulfilled" && result.value ? [result.value] : []
-    )
-    const readableLocalArticleCount = localArticles.filter(
-      (item) => item.exists
-    ).length
-    const missingLocalFileCount =
-      downloadedArticles.length - readableLocalArticleCount
-    const articleLines = localArticles.flatMap(
-      ({ article, path, exists }, index) => [
-        `${index + 1}. ${article.title}`,
-        `   文章 ID：${article.aid}`,
-        `   发布时间：${formatAccountArticleDate(article.create_time)}`,
-        `   原文链接：${article.link}`,
-        `   文件地址${exists ? "" : "（文件缺失）"}：${path}`,
-      ]
-    )
+    const archiveSummary = await api.archiveArticlesLocal({
+      account_fakeid: account.fakeid,
+    })
+    const localMarkdownCount = archiveSummary.rendered + archiveSummary.skipped
     const copiedText = [
       "微信公众号信息",
       `名称：${account.nickname}`,
@@ -1678,16 +1641,10 @@ async function copyAccountBasicInfo(account: Account) {
       `公众号文章总数：${account.article_count}`,
       `本地文章索引：${articles.length}`,
       `已下载正文：${downloadedArticles.length}`,
-      `本地 Markdown：${readableLocalArticleCount}`,
+      `本地 Markdown：${localMarkdownCount}`,
+      `文章存储位置：${archiveSummary.archive_dir}`,
+      "文章目录结构：accounts/<公众号目录>/articles/*.md",
       `缓存数据库：${cacheDbPath}`,
-      archiveSummary ? `本地归档目录：${archiveSummary.archive_dir}` : null,
-      missingLocalFileCount > 0
-        ? `未找到本地 Markdown：${missingLocalFileCount} 篇（可根据缓存数据库继续处理）`
-        : null,
-      localArticles.length > 0
-        ? `\n已下载文章地址（${localArticles.length} 篇）：`
-        : "\n已下载文章文件：暂无可读取的本地 Markdown",
-      ...articleLines,
     ]
       .filter((line): line is string => line !== null)
       .join("\n")
@@ -1696,14 +1653,6 @@ async function copyAccountBasicInfo(account: Account) {
   } catch (error) {
     toast.error(`复制公众号信息失败：${errorMessage(error)}`)
   }
-}
-
-function formatAccountArticleDate(unix: number): string {
-  const date = new Date(unix * 1000)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, "0")
-  const day = String(date.getDate()).padStart(2, "0")
-  return `${year}-${month}-${day}`
 }
 
 function errorMessage(error: unknown): string {
