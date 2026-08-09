@@ -667,6 +667,7 @@ function WorkspaceApp() {
             lovstudioEmail={lovstudioEmail}
             lovstudioAvatarUrl={lovstudioAvatarUrl}
             lovstudioUserId={lovstudioAccountId}
+            setupProgress={setupProgress}
             loggedIn={loggedIn}
             authAccount={authAccount}
             lastLoginAt={lastLoginAt}
@@ -677,6 +678,10 @@ function WorkspaceApp() {
             onCheckWechatSession={checkWechatSession}
             onLovstudioLogin={() => setLovstudioAuthOpen(true)}
             onLovstudioLogout={() => void signOutLovstudio()}
+            onOpenSetup={() => {
+              setActiveTab("reader")
+              setSetupPanelOpen(true)
+            }}
             onLogin={openWechatLogin}
             onLogoutWechatAccount={() => void logoutWechatAccount()}
             onSelect={(id) => {
@@ -699,7 +704,6 @@ function WorkspaceApp() {
               onOpenLovstudioLogin={() => setLovstudioAuthOpen(true)}
               onOpenSetup={() => {
                 setActiveTab("reader")
-                setActiveAid(null)
                 setSetupPanelOpen(true)
               }}
               onTabChange={setActiveTab}

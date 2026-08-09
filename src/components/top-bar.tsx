@@ -113,16 +113,17 @@ export function TopBar({
       </nav>
       {user ? (
         <div className="ml-auto flex items-center gap-3">
-          {typeof setupProgress === "number" && setupProgress < 3 ? (
+          {typeof setupProgress === "number" ? (
             <Button
               type="button"
               size="sm"
               variant="outline"
               className="hidden border-border/70 bg-card/70 text-foreground shadow-sm sm:inline-flex"
+              aria-label="打开账号准备清单"
               onClick={onOpenSetup}
             >
               <ListChecksIcon className="size-4" />
-              准备进度 {setupProgress}/3
+              账号准备 {setupProgress}/3
             </Button>
           ) : null}
           <ResourceConditions />
@@ -164,20 +165,35 @@ export function TopBar({
           </Tooltip>
         </div>
       ) : (
-        <Button
-          type="button"
-          size="sm"
-          className="ml-auto shadow-sm"
-          disabled={authLoading}
-          onClick={onOpenLovstudioLogin}
-        >
-          {authLoading ? (
-            <Loader2Icon className="size-4 animate-spin" />
-          ) : (
-            <LogInIcon className="size-4" />
-          )}
-          登录 Lovstudio
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {typeof setupProgress === "number" ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="hidden border-border/70 bg-card/70 text-foreground shadow-sm sm:inline-flex"
+              aria-label="打开账号准备清单"
+              onClick={onOpenSetup}
+            >
+              <ListChecksIcon className="size-4" />
+              账号准备 {setupProgress}/3
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            className="shadow-sm"
+            disabled={authLoading}
+            onClick={onOpenLovstudioLogin}
+          >
+            {authLoading ? (
+              <Loader2Icon className="size-4 animate-spin" />
+            ) : (
+              <LogInIcon className="size-4" />
+            )}
+            登录 Lovstudio
+          </Button>
+        </div>
       )}
     </header>
   )

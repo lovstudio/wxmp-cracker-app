@@ -30,12 +30,14 @@ import {
   ArrowDownToLineIcon,
   ArrowUpToLineIcon,
   CheckCircle2Icon,
+  ChevronRightIcon,
   CopyIcon,
   GaugeIcon,
   GripVerticalIcon,
   HandshakeIcon,
   KeyRoundIcon,
   Loader2Icon,
+  ListChecksIcon,
   LogOutIcon,
   MoreHorizontalIcon,
   PinIcon,
@@ -97,6 +99,7 @@ interface Props {
   lovstudioEmail: string | null
   lovstudioAvatarUrl: string | null
   lovstudioUserId: string | null
+  setupProgress: number
   loggedIn: boolean
   authAccount: LoginAccount | null
   lastLoginAt: number | null
@@ -105,6 +108,7 @@ interface Props {
   lastAuthCheckAt: number | null
   onLovstudioLogin: () => void
   onLovstudioLogout: () => void
+  onOpenSetup: () => void
   onSelect: (fakeid: string) => void
   onAddAccount: (query?: string) => void
   onCheckWechatSession: (toastOnSuccess?: boolean) => void | Promise<void>
@@ -153,6 +157,7 @@ export function AccountSidebar({
   lovstudioEmail,
   lovstudioAvatarUrl,
   lovstudioUserId,
+  setupProgress,
   loggedIn,
   authAccount,
   lastLoginAt,
@@ -161,6 +166,7 @@ export function AccountSidebar({
   lastAuthCheckAt,
   onLovstudioLogin,
   onLovstudioLogout,
+  onOpenSetup,
   onSelect,
   onAddAccount,
   onCheckWechatSession,
@@ -345,6 +351,30 @@ export function AccountSidebar({
             </div>
           </div>
         </div>
+        <button
+          type="button"
+          className="group flex w-full min-w-0 items-center gap-3 rounded-xl border border-sidebar-border/70 bg-sidebar/35 px-3 py-2.5 text-left text-sidebar-foreground outline-hidden transition-colors hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          aria-label={`打开账号准备清单，${setupProgress}/3 已完成`}
+          onClick={onOpenSetup}
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/12 text-sidebar-primary">
+            <ListChecksIcon className="size-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2 text-xs font-semibold">
+              <span>账号准备</span>
+              <span className="font-mono text-sidebar-foreground/55">
+                {setupProgress}/3
+              </span>
+            </span>
+            <span className="mt-0.5 block truncate text-[11px] text-sidebar-foreground/48">
+              {setupProgress === 3
+                ? "账号、来源和文章库已就绪"
+                : "完成三步即可开始使用"}
+            </span>
+          </span>
+          <ChevronRightIcon className="size-4 shrink-0 text-sidebar-foreground/35 transition-transform group-hover:translate-x-0.5" />
+        </button>
         <div className="search-shell relative rounded-lg">
           <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-sidebar-foreground/45" />
           <Input
