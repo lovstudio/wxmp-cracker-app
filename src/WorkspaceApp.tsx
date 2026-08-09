@@ -8,6 +8,7 @@ import {
 } from "react"
 import { AccountSidebar } from "@/components/account-sidebar"
 import { AccountWorkspace } from "@/components/account-workspace"
+import { GettingStartedPanel } from "@/components/getting-started-panel"
 import { GithubSyncSettings } from "@/components/github-sync-settings"
 import { ArticleList } from "@/components/article-list"
 import { ArticleDetail as ArticleDetailView } from "@/components/article-detail"
@@ -121,6 +122,7 @@ function WorkspaceApp() {
   const [licenseOpen, setLicenseOpen] = useState(false)
   const [licenseAdminOpen, setLicenseAdminOpen] = useState(false)
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null)
+  const [setupPanelOpen, setSetupPanelOpen] = useState(false)
   const [pendingFetch, setPendingFetch] = useState<PendingFetch | null>(null)
   const [fetchProgressEvents, setFetchProgressEvents] = useState<
     FetchAccountProgress[]
@@ -183,6 +185,21 @@ function WorkspaceApp() {
   const lovstudioAvatarUrl =
     profile?.avatar_url ??
     authUserMetadataString(user, ["avatar_url", "picture"])
+  const savedAccountCount = accounts.length
+  const articleCount = accounts.reduce(
+    (total, account) => total + account.article_count,
+    0
+  )
+  const sourceReady = loggedIn || savedAccountCount > 0
+  const setupProgress = [
+    Boolean(user),
+    sourceReady,
+    savedAccountCount > 0,
+  ].filter(Boolean).length
+  const showGettingStarted =
+    activeTab === "reader" &&
+    accountsLoaded &&
+    (setupPanelOpen || savedAccountCount === 0)
 
   const refreshAccounts = useCallback(async () => {
     try {
@@ -197,65 +214,68 @@ function WorkspaceApp() {
     }
   }, [])
 
-  const refreshAuth = useCallback(async (options: RefreshAuthOptions = {}) => {
-    if (authRefreshInFlightRef.current) {
-      return null
-    }
-
-    authRefreshInFlightRef.current = true
-    setAuthChecking(true)
-
-    try {
-      const s = await api.authStatus()
-      const checkedAt = s.checked_at ?? currentUnixTimestamp()
-      const expired = Boolean(s.expired)
-      const sessionActive = s.logged_in && !expired
-
-      setLoggedIn(sessionActive)
-      setAuthAccount(sessionActive ? s.account : null)
-      setLastLoginAt(s.last_login_at)
-      setAuthExpired(expired)
-      setLastAuthCheckAt(checkedAt)
-
-      if (sessionActive && s.account?.avatar) {
-        await refreshAccounts()
+  const refreshAuth = useCallback(
+    async (options: RefreshAuthOptions = {}) => {
+      if (authRefreshInFlightRef.current) {
+        return null
       }
 
-      if (expired) {
-        const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
-        if (options.notifyExpired || !authExpiredNotifiedRef.current) {
-          toast.wxmpError(message, api.openLogin, { duration: 20000 })
-          authExpiredNotifiedRef.current = true
+      authRefreshInFlightRef.current = true
+      setAuthChecking(true)
+
+      try {
+        const s = await api.authStatus()
+        const checkedAt = s.checked_at ?? currentUnixTimestamp()
+        const expired = Boolean(s.expired)
+        const sessionActive = s.logged_in && !expired
+
+        setLoggedIn(sessionActive)
+        setAuthAccount(sessionActive ? s.account : null)
+        setLastLoginAt(s.last_login_at)
+        setAuthExpired(expired)
+        setLastAuthCheckAt(checkedAt)
+
+        if (sessionActive && s.account?.avatar) {
+          await refreshAccounts()
         }
-      } else {
-        authExpiredNotifiedRef.current = false
-        if (options.toastOnSuccess && sessionActive) {
-          if (s.message) {
-            toast.warning(s.message)
-          } else {
-            toast.success("微信公众号 Session 有效")
+
+        if (expired) {
+          const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
+          if (options.notifyExpired || !authExpiredNotifiedRef.current) {
+            toast.wxmpError(message, api.openLogin, { duration: 20000 })
+            authExpiredNotifiedRef.current = true
+          }
+        } else {
+          authExpiredNotifiedRef.current = false
+          if (options.toastOnSuccess && sessionActive) {
+            if (s.message) {
+              toast.warning(s.message)
+            } else {
+              toast.success("微信公众号 Session 有效")
+            }
           }
         }
+
+        return s
+      } catch (error) {
+        setLoggedIn(false)
+        setAuthAccount(null)
+        setLastLoginAt(null)
+        setAuthExpired(false)
+        setLastAuthCheckAt(currentUnixTimestamp())
+
+        if (options.toastOnError && isTauri()) {
+          toast.error(`校验公众号登录状态失败: ${errorMessage(error)}`)
+        }
+
+        return null
+      } finally {
+        authRefreshInFlightRef.current = false
+        setAuthChecking(false)
       }
-
-      return s
-    } catch (error) {
-      setLoggedIn(false)
-      setAuthAccount(null)
-      setLastLoginAt(null)
-      setAuthExpired(false)
-      setLastAuthCheckAt(currentUnixTimestamp())
-
-      if (options.toastOnError && isTauri()) {
-        toast.error(`校验公众号登录状态失败: ${errorMessage(error)}`)
-      }
-
-      return null
-    } finally {
-      authRefreshInFlightRef.current = false
-      setAuthChecking(false)
-    }
-  }, [refreshAccounts])
+    },
+    [refreshAccounts]
+  )
 
   const checkWechatSession = useCallback(
     async (toastOnSuccess = false) => {
@@ -421,6 +441,15 @@ function WorkspaceApp() {
       return
     }
 
+    const isArticleLink = /^https?:\/\/mp\.weixin\.qq\.com\/s\//i.test(
+      initialQuery?.trim() ?? ""
+    )
+    if (!loggedIn && !isArticleLink) {
+      toast.info("请先连接公众号账号，再搜索和采集公众号")
+      openWechatLogin()
+      return
+    }
+
     setFetchProgressEvents([])
     setAddAccountInitialQuery(initialQuery?.trim() ?? "")
     setAddAccountOpen(true)
@@ -472,6 +501,7 @@ function WorkspaceApp() {
 
       toast.success(`已新增 ${added?.nickname ?? account.nickname}`)
       setAddAccountOpen(false)
+      setSetupPanelOpen(false)
       setAddAccountInitialQuery("")
       setFetchProgressEvents([])
 
@@ -505,6 +535,7 @@ function WorkspaceApp() {
     setActiveFakeid(article.fakeid)
     setActiveAid(article.aid)
     setActiveTab("reader")
+    setSetupPanelOpen(false)
     setArticleRefreshKey((key) => key + 1)
     setAddAccountOpen(false)
     setAddAccountInitialQuery("")
@@ -663,8 +694,14 @@ function WorkspaceApp() {
           <SidebarInset className="app-main h-full min-h-0 overflow-hidden">
             <TopBar
               activeTab={activeTab}
+              setupProgress={setupProgress}
               onOpenLicenseAdmin={() => setLicenseAdminOpen(true)}
               onOpenLovstudioLogin={() => setLovstudioAuthOpen(true)}
+              onOpenSetup={() => {
+                setActiveTab("reader")
+                setActiveAid(null)
+                setSetupPanelOpen(true)
+              }}
               onTabChange={setActiveTab}
             />
             <div
@@ -677,7 +714,30 @@ function WorkspaceApp() {
                   : undefined
               }
             >
-              {activeTab === "reader" ? (
+              {showGettingStarted ? (
+                <GettingStartedPanel
+                  lovstudioLoading={lovstudioAuthLoading}
+                  lovstudioReady={Boolean(user)}
+                  lovstudioLabel={lovstudioEmail ?? lovstudioDisplayName}
+                  licenseStatus={licenseStatus}
+                  sourceReady={sourceReady}
+                  sourceLabel={
+                    loggedIn
+                      ? (authAccount?.nickname ?? "公众号账号已连接")
+                      : savedAccountCount > 0
+                        ? `已保存 ${savedAccountCount} 个公众号`
+                        : null
+                  }
+                  savedAccountCount={savedAccountCount}
+                  articleCount={articleCount}
+                  canClose={savedAccountCount > 0}
+                  onLovstudioLogin={() => setLovstudioAuthOpen(true)}
+                  onOpenLicense={() => setLicenseOpen(true)}
+                  onConnectWechat={openWechatLogin}
+                  onAddAccount={() => openAddAccount()}
+                  onClose={() => setSetupPanelOpen(false)}
+                />
+              ) : activeTab === "reader" ? (
                 <>
                   <ArticleList
                     account={activeAccount}
