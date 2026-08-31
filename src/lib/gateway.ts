@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client"
 import type { Database, Json } from "@/integrations/supabase/types"
+import type { FetchMode } from "@/lib/api"
 
 export type GatewayRequestKind = "self" | "commercial"
 export type EnqueuedGatewayRequest =
@@ -224,7 +225,7 @@ export function enqueueGatewayFetchSelectedAccount(input: {
   }
   limit: number
   withContent: boolean
-  mode?: "forward" | "backward" | "audit"
+  mode?: FetchMode
   auditDate?: string | null
   priority?: number
   idempotencyKey?: string | null

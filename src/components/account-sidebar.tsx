@@ -29,6 +29,7 @@ import {
   ArchiveIcon,
   ArrowDownToLineIcon,
   ArrowUpToLineIcon,
+  BlocksIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   CopyIcon,
@@ -85,7 +86,9 @@ import {
   WechatSelfCapabilityPreferenceControl,
 } from "@/components/wechat-capability-settings"
 import { QuotaSettingsPanel } from "@/components/quota-settings-panel"
+import { IntegrationSettings } from "@/components/integration-settings"
 import { api, type Account, type LoginAccount } from "@/lib/api"
+import { buildAccountAgentHandoff } from "@/lib/account-handoff"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyText, copyableToast as toast } from "@/lib/toast"
 import { createPortal } from "react-dom"
@@ -123,7 +126,12 @@ interface Props {
   onMoveToBottom: (fakeid: string) => void
 }
 
-type SettingsPane = "account" | "connections" | "commercial" | "quota"
+type SettingsPane =
+  | "account"
+  | "connections"
+  | "integrations"
+  | "commercial"
+  | "quota"
 type WechatAuthState = "online" | "offline" | "expired" | "checking"
 
 interface AccountMenuState {
@@ -549,6 +557,10 @@ export function AccountSidebar({
               <Settings2Icon className="size-3.5" />
               连接配置
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openSettings("integrations")}>
+              <BlocksIcon className="size-3.5" />
+              集成管理
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => openSettings("commercial")}>
               <HandshakeIcon className="size-3.5" />
               公众号商业化
@@ -562,6 +574,7 @@ export function AccountSidebar({
       </SidebarFooter>
       {settingsOpen ? (
         <AppSettingsWindow
+          accounts={[...accounts, ...archivedAccounts]}
           authAccount={authAccount}
           authAlias={authAlias}
           authAvatar={authAvatar}
@@ -606,6 +619,7 @@ export function AccountSidebar({
 }
 
 function AppSettingsWindow({
+  accounts,
   authAccount,
   authAlias,
   authAvatar,
@@ -631,6 +645,7 @@ function AppSettingsWindow({
   onLovstudioLogin,
   onLovstudioLogout,
 }: {
+  accounts: Account[]
   authAccount: LoginAccount | null
   authAlias: string | null
   authAvatar: string | null
@@ -711,6 +726,12 @@ function AppSettingsWindow({
               onClick={() => setActivePane("connections")}
             />
             <SettingsNavButton
+              active={activePane === "integrations"}
+              icon={<BlocksIcon className="size-4" />}
+              label="集成"
+              onClick={() => setActivePane("integrations")}
+            />
+            <SettingsNavButton
               active={activePane === "commercial"}
               icon={<HandshakeIcon className="size-4" />}
               label="商业化"
@@ -747,6 +768,14 @@ function AppSettingsWindow({
                 onClick={() => setActivePane("connections")}
               >
                 连接
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={activePane === "integrations" ? "secondary" : "ghost"}
+                onClick={() => setActivePane("integrations")}
+              >
+                集成
               </Button>
               <Button
                 type="button"
@@ -1073,6 +1102,8 @@ function AppSettingsWindow({
                     </div>
                   </section>
                 </div>
+              ) : activePane === "integrations" ? (
+                <IntegrationSettings accounts={accounts} />
               ) : activePane === "commercial" ? (
                 <WechatCommercialSupportPanel />
               ) : (
@@ -1114,6 +1145,7 @@ function SettingsNavButton({
 function settingsPaneTitle(pane: SettingsPane) {
   if (pane === "account") return "账号"
   if (pane === "connections") return "连接"
+  if (pane === "integrations") return "集成管理"
   if (pane === "commercial") return "公众号商业化"
   return "频率"
 }
@@ -1337,7 +1369,7 @@ function AccountActionMenu({
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void copyAccountBasicInfo(account)}>
           <CopyIcon className="size-3.5" />
-          复制公众号信息
+          复制 Agent 定位信息
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -1430,7 +1462,7 @@ function ArchivedAccountItem({
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => void copyAccountBasicInfo(account)}>
             <CopyIcon className="size-3.5" />
-            复制公众号信息
+            复制 Agent 定位信息
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -1484,7 +1516,7 @@ function AccountContextMenu({
             },
             {
               key: "copy-account-info",
-              label: "复制公众号信息",
+              label: "复制 Agent 定位信息",
               icon: <CopyIcon className="size-3.5" />,
               action: () => copyAccountBasicInfo(account),
             },
@@ -1545,7 +1577,7 @@ function AccountContextMenu({
             },
             {
               key: "copy-account-info",
-              label: "复制公众号信息",
+              label: "复制 Agent 定位信息",
               icon: <CopyIcon className="size-3.5" />,
               action: () => copyAccountBasicInfo(account),
             },
@@ -1649,39 +1681,23 @@ function getAccountContextMenuEstimatedHeight(archived: boolean) {
 }
 
 async function copyAccountBasicInfo(account: Account) {
-  toast.info(`正在整理 ${account.nickname} 的归档信息…`)
-
   try {
     const [articles, cacheDbPath] = await Promise.all([
       api.listArticles(account.fakeid),
       api.cacheDbPath(),
     ])
-    const downloadedArticles = articles.filter((article) => article.has_content)
-    const archiveSummary = await api.archiveArticlesLocal({
-      account_fakeid: account.fakeid,
+    const copiedText = buildAccountAgentHandoff({
+      account,
+      articles,
+      cacheDbPath,
     })
-    const localMarkdownCount = archiveSummary.rendered + archiveSummary.skipped
-    const copiedText = [
-      "微信公众号信息",
-      `名称：${account.nickname}`,
-      account.alias ? `微信号：${account.alias}` : null,
-      account.signature ? `签名：${account.signature}` : null,
-      account.avatar ? `头像地址：${account.avatar}` : null,
-      `公众号 ID：${account.fakeid}`,
-      `公众号文章总数：${account.article_count}`,
-      `本地文章索引：${articles.length}`,
-      `已下载正文：${downloadedArticles.length}`,
-      `本地 Markdown：${localMarkdownCount}`,
-      `文章存储位置：${archiveSummary.archive_dir}`,
-      "文章目录结构：accounts/<公众号目录>/articles/*.md",
-      `缓存数据库：${cacheDbPath}`,
-    ]
-      .filter((line): line is string => line !== null)
-      .join("\n")
 
-    await copyText(copiedText)
+    await copyText(
+      copiedText,
+      `已复制 ${account.nickname} 的 Agent 定位信息（${articles.length} 篇）`
+    )
   } catch (error) {
-    toast.error(`复制公众号信息失败：${errorMessage(error)}`)
+    toast.error(`复制 Agent 定位信息失败：${errorMessage(error)}`)
   }
 }
 

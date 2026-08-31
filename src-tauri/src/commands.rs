@@ -21,7 +21,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 use crate::auth;
-use crate::db::{self, Account, ArticleDetail, ArticleSummary};
+use crate::db::{self, Account, ArticleDetail, ArticleSummary, ArticleTag};
 use crate::license;
 
 #[derive(Serialize)]
@@ -39,6 +39,14 @@ pub struct FetchAccountResult {
 pub struct ArticleLocalFile {
     pub path: String,
     pub exists: bool,
+}
+
+#[derive(Serialize)]
+pub struct ArticleManagementRow {
+    #[serde(flatten)]
+    pub article: ArticleSummary,
+    pub tags: Vec<String>,
+    pub local_file_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,11 +99,14 @@ struct ArticlePageMetadata {
     digest: Option<String>,
     cover: Option<String>,
     create_time: Option<i64>,
+    article_type: Option<i64>,
+    copyright_type: Option<i64>,
 }
 
 const FETCH_ACCOUNT_PROGRESS_EVENT: &str = "fetch-account://progress";
 const FETCH_PROGRESS_PREFIX: &str = "__WXMP_FETCH_PROGRESS__";
 const FETCH_DAEMON_READY_PREFIX: &str = "__WXMP_FETCH_DAEMON_READY__";
+const MAX_ARTICLE_TABLE_EXPORT_BYTES: usize = 50 * 1024 * 1024;
 const FETCH_DAEMON_RESULT_PREFIX: &str = "__WXMP_FETCH_DAEMON_RESULT__";
 const WECHAT_REFERER_URL: &str = "https://mp.weixin.qq.com/";
 const WECHAT_ORIGIN_URL: &str = "https://mp.weixin.qq.com";
@@ -255,6 +266,40 @@ pub fn list_articles(fakeid: String) -> Result<Vec<ArticleSummary>, CmdError> {
 }
 
 #[tauri::command]
+pub fn list_article_tag_names(fakeid: String) -> Result<HashMap<String, Vec<String>>, CmdError> {
+    db::list_article_tag_names(&fakeid).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_article_management_rows(fakeid: String) -> Result<Vec<ArticleManagementRow>, CmdError> {
+    let articles = db::list_articles(&fakeid).map_err(CmdError::from)?;
+    let mut tags_by_article = db::list_article_tag_names(&fakeid).map_err(CmdError::from)?;
+    let aids = articles
+        .iter()
+        .map(|article| article.aid.clone())
+        .collect::<Vec<_>>();
+    let local_paths = match archive::article_local_file_paths(&aids) {
+        Ok(paths) => paths,
+        Err(error) => {
+            log::warn!("读取文章归档地址失败，文章管理将暂不显示文件地址: {error}");
+            HashMap::new()
+        }
+    };
+
+    Ok(articles
+        .into_iter()
+        .map(|article| {
+            let aid = article.aid.clone();
+            ArticleManagementRow {
+                article,
+                tags: tags_by_article.remove(&aid).unwrap_or_default(),
+                local_file_path: local_paths.get(&aid).map(|path| path.display().to_string()),
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
 pub fn search_articles(fakeid: String, query: String) -> Result<Vec<ArticleSummary>, CmdError> {
     db::search_articles(&fakeid, &query).map_err(Into::into)
 }
@@ -262,6 +307,46 @@ pub fn search_articles(fakeid: String, query: String) -> Result<Vec<ArticleSumma
 #[tauri::command]
 pub fn get_article(aid: String) -> Result<Option<ArticleDetail>, CmdError> {
     db::get_article(&aid).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_article_tags(aid: String) -> Result<Vec<ArticleTag>, CmdError> {
+    db::list_article_tags(&aid).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_all_article_tags() -> Result<Vec<ArticleTag>, CmdError> {
+    db::list_all_article_tags().map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_tag_articles(tag_id: i64) -> Result<Vec<ArticleSummary>, CmdError> {
+    db::list_tag_articles(tag_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn create_article_tag(name: String) -> Result<ArticleTag, CmdError> {
+    db::create_article_tag(&name).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn create_and_assign_article_tag(aid: String, name: String) -> Result<ArticleTag, CmdError> {
+    db::create_and_assign_article_tag(&aid, &name).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn update_article_tag(tag_id: i64, name: String) -> Result<ArticleTag, CmdError> {
+    db::update_article_tag(tag_id, &name).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn delete_article_tag(tag_id: i64) -> Result<(), CmdError> {
+    db::delete_article_tag(tag_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn set_article_tag(aid: String, tag_id: i64, assigned: bool) -> Result<(), CmdError> {
+    db::set_article_tag(&aid, tag_id, assigned).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -311,6 +396,89 @@ async fn ensure_article_local_file(app: AppHandle, aid: String) -> Result<PathBu
 pub async fn export_article_local(app: AppHandle, aid: String) -> Result<String, CmdError> {
     let path = ensure_article_local_file(app, aid).await?;
     Ok(path.display().to_string())
+}
+
+#[tauri::command]
+pub async fn export_articles_table(file_name: String, csv: String) -> Result<String, CmdError> {
+    if csv.trim().is_empty() {
+        return Err(CmdError {
+            message: "没有可导出的表格数据".to_string(),
+        });
+    }
+    if csv.len() > MAX_ARTICLE_TABLE_EXPORT_BYTES {
+        return Err(CmdError {
+            message: "表格数据超过 50 MB，请缩小筛选范围后重试".to_string(),
+        });
+    }
+
+    let download_dir = dirs::download_dir().ok_or_else(|| CmdError {
+        message: "无法定位系统下载目录".to_string(),
+    })?;
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        write_article_table_export(&download_dir, &file_name, &csv)
+    })
+    .await
+    .map_err(|error| CmdError {
+        message: format!("导出表格任务失败: {error}"),
+    })??;
+
+    if let Err(error) = tauri_plugin_opener::reveal_item_in_dir(&path) {
+        log::warn!("导出表格成功，但无法在 Finder 中显示文件: {error}");
+    }
+    Ok(path.display().to_string())
+}
+
+fn write_article_table_export(
+    export_dir: &Path,
+    file_name: &str,
+    content: &str,
+) -> Result<PathBuf, CmdError> {
+    fs::create_dir_all(export_dir).map_err(|error| CmdError {
+        message: format!("创建表格导出目录失败: {error}"),
+    })?;
+
+    let stem = article_table_export_stem(file_name);
+    let mut path = export_dir.join(format!("{stem}.csv"));
+    let mut copy_index = 2_u32;
+    while path.exists() {
+        path = export_dir.join(format!("{stem}-{copy_index}.csv"));
+        copy_index += 1;
+    }
+
+    fs::write(&path, content.as_bytes()).map_err(|error| CmdError {
+        message: format!("写入表格文件失败: {error}"),
+    })?;
+    Ok(path)
+}
+
+fn article_table_export_stem(file_name: &str) -> String {
+    let file_name = Path::new(file_name.trim())
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("微探-文章.csv");
+    let stem = file_name
+        .strip_suffix(".csv")
+        .or_else(|| file_name.strip_suffix(".CSV"))
+        .unwrap_or(file_name);
+    let sanitized: String = stem
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric()
+                || matches!(character, ' ' | '-' | '_' | '.' | '（' | '）')
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(80)
+        .collect();
+    let sanitized = sanitized.trim_matches(|character| matches!(character, ' ' | '-' | '_' | '.'));
+    if sanitized.is_empty() {
+        "微探-文章".to_string()
+    } else {
+        sanitized.to_string()
+    }
 }
 
 // Open/reveal from Rust so the opener bypasses the webview's path scope (the
@@ -848,7 +1016,7 @@ pub async fn fetch_selected_account(
         .filter(|s| !s.is_empty())
         .unwrap_or("forward")
         .to_string();
-    if !matches!(mode.as_str(), "forward" | "backward" | "audit") {
+    if !matches!(mode.as_str(), "forward" | "backward" | "audit" | "classify") {
         return Err(CmdError {
             message: format!("未知抓取模式：{mode}"),
         });
@@ -873,6 +1041,7 @@ pub async fn fetch_selected_account(
         let prepare_msg = match mode.as_str() {
             "backward" => "正在启动向后续抓任务",
             "audit" => "正在启动完备性回扫任务",
+            "classify" => "正在启动旧数据分类回填任务",
             _ => "正在启动抓取任务",
         };
         emit_fetch_progress(
@@ -1123,6 +1292,12 @@ pub async fn import_article_link(link: String) -> Result<ArticleDetail, CmdError
             .as_deref()
             .and_then(clean_optional_string)
             .or_else(|| existing.as_ref().and_then(|article| article.author.clone()));
+        let article_type = metadata
+            .article_type
+            .or_else(|| existing.as_ref().and_then(|article| article.article_type));
+        let copyright_type = metadata
+            .copyright_type
+            .or_else(|| existing.as_ref().and_then(|article| article.copyright_type));
         let link = url.to_string();
 
         let account = db::AccountUpsert {
@@ -1142,6 +1317,8 @@ pub async fn import_article_link(link: String) -> Result<ArticleDetail, CmdError
             author: author.as_deref(),
             create_time,
             update_time: Some(create_time),
+            article_type,
+            copyright_type,
             content_html: Some(content_html.as_str()),
             content_md: Some(content_md.as_str()),
         };
@@ -1187,6 +1364,12 @@ impl ArticlePageMetadata {
         }
         if self.create_time.is_none() {
             self.create_time = other.create_time;
+        }
+        if self.article_type.is_none() {
+            self.article_type = other.article_type;
+        }
+        if self.copyright_type.is_none() {
+            self.copyright_type = other.copyright_type;
         }
     }
 }
@@ -1319,6 +1502,15 @@ fn parse_article_page_metadata(html: &str) -> ArticlePageMetadata {
         cover: extract_js_string(html, &["msg_cdn_url", "cdn_url"])
             .or_else(|| extract_meta_content(html, &["og:image", "twitter:image"])),
         create_time: extract_js_i64(html, &["ct", "createTime", "publish_time"]),
+        article_type: extract_js_integer(html, &["appmsg_type"]),
+        copyright_type: extract_js_integer(html, &["copyright_type"]).or_else(|| {
+            match extract_js_integer(html, &["copyright_stat"]) {
+                Some(100) => Some(0),
+                Some(11) => Some(1),
+                Some(201) => Some(2),
+                _ => None,
+            }
+        }),
     }
 }
 
@@ -1458,6 +1650,30 @@ fn extract_js_i64(html: &str, names: &[&str]) -> Option<i64> {
         .expect("js int regex");
         if let Some(value) = re
             .captures(html)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<i64>().ok())
+        {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn extract_js_integer(html: &str, names: &[&str]) -> Option<i64> {
+    for name in names {
+        let escaped = regex::escape(name);
+        let assignment = Regex::new(&format!(
+            r#"(?s)(?:var\s+)?{escaped}\s*=\s*["']?([0-9]+)["']?"#
+        ))
+        .expect("js integer regex");
+        let json = Regex::new(&format!(
+            r#"(?s)["']{escaped}["']\s*:\s*["']?([0-9]+)["']?"#
+        ))
+        .expect("json integer regex");
+        if let Some(value) = assignment
+            .captures(html)
+            .or_else(|| json.captures(html))
             .and_then(|captures| captures.get(1))
             .and_then(|value| value.as_str().parse::<i64>().ok())
         {
@@ -2130,6 +2346,7 @@ fn first_nonempty_line(s: &str) -> Option<String> {
 // ---------------- GitHub archive integration -----------------------------
 
 use crate::archive;
+use crate::feishu;
 use crate::github;
 use crate::sync;
 
@@ -2290,9 +2507,94 @@ pub async fn archive_articles_local(
         .map_err(Into::into)
 }
 
+// ---------------- Feishu knowledge-base integration ----------------------
+
+#[tauri::command]
+pub fn feishu_settings_get() -> Result<feishu::SettingsView, CmdError> {
+    feishu::settings().map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn feishu_configure_credentials(
+    app_id: String,
+    app_secret: String,
+) -> Result<feishu::SettingsView, CmdError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        feishu::configure_credentials(&app_id, &app_secret)
+    })
+    .await
+    .map_err(|error| CmdError {
+        message: format!("飞书凭证验证任务失败: {error}"),
+    })?
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn feishu_settings_set(
+    settings: feishu::SettingsInput,
+) -> Result<feishu::SettingsView, CmdError> {
+    feishu::save_settings(settings).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn feishu_disconnect() -> Result<feishu::SettingsView, CmdError> {
+    feishu::disconnect().map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn feishu_list_spaces() -> Result<Vec<feishu::SpaceBrief>, CmdError> {
+    tauri::async_runtime::spawn_blocking(feishu::list_spaces)
+        .await
+        .map_err(|error| CmdError {
+            message: format!("读取飞书知识库任务失败: {error}"),
+        })?
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn feishu_resolve_wiki_target(input: String) -> Result<feishu::WikiNodeBrief, CmdError> {
+    tauri::async_runtime::spawn_blocking(move || feishu::resolve_wiki_target(&input))
+        .await
+        .map_err(|error| CmdError {
+            message: format!("识别飞书页面任务失败: {error}"),
+        })?
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn feishu_sync_articles(
+    app: AppHandle,
+    options: feishu::SyncOptions,
+) -> Result<feishu::SyncSummary, CmdError> {
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || feishu::sync_articles(&progress_app, options))
+        .await
+        .map_err(|error| CmdError {
+            message: format!("飞书同步任务失败: {error}"),
+        })?
+        .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn article_page_metadata_reads_filter_classifiers() {
+        let metadata = parse_article_page_metadata(
+            r#"<script>
+                var appmsg_type = "10002";
+                var copyright_type = 2;
+            </script>"#,
+        );
+
+        assert_eq!(metadata.article_type, Some(10002));
+        assert_eq!(metadata.copyright_type, Some(2));
+
+        let status_metadata =
+            parse_article_page_metadata(r#"<script>{"copyright_stat":"11"}</script>"#);
+        assert_eq!(status_metadata.copyright_type, Some(1));
+    }
 
     #[test]
     fn search_response_maps_valid_accounts_and_skips_incomplete_rows() {
@@ -2391,6 +2693,33 @@ mod tests {
         assert_eq!(
             launches, 1,
             "wcx may only be launched by the app-start daemon bootstrap"
+        );
+    }
+
+    #[test]
+    fn article_table_export_uses_safe_unique_csv_paths() {
+        let export_dir = tempfile::tempdir().expect("temp export dir");
+        let content = "\u{feff}\"标题\"\r\n\"测试文章\"\r\n";
+
+        let first =
+            write_article_table_export(export_dir.path(), "../手工川/文章数据.csv", content)
+                .expect("first table export");
+        let second =
+            write_article_table_export(export_dir.path(), "../手工川/文章数据.csv", content)
+                .expect("second table export");
+
+        assert_eq!(first.parent(), Some(export_dir.path()));
+        assert_eq!(
+            first.file_name().and_then(|value| value.to_str()),
+            Some("文章数据.csv")
+        );
+        assert_eq!(
+            second.file_name().and_then(|value| value.to_str()),
+            Some("文章数据-2.csv")
+        );
+        assert_eq!(
+            fs::read_to_string(first).expect("read exported CSV"),
+            content
         );
     }
 }

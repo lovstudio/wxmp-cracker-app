@@ -114,6 +114,23 @@ pub fn article_local_file_path(aid: &str) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+/// Resolve many article paths while loading each archive index at most once.
+/// The local-only archive wins over a configured GitHub clone, matching
+/// `article_local_file_path` without an index read for every table row.
+pub fn article_local_file_paths(aids: &[String]) -> Result<HashMap<String, PathBuf>> {
+    let mut paths = HashMap::new();
+    resolve_articles_in_dir(&archive_dir()?, aids, &mut paths)?;
+
+    if paths.len() < aids.len() {
+        let settings = load_settings()?;
+        if let Some(repo_full_name) = settings.repo_full_name.as_deref() {
+            resolve_articles_in_dir(&repo_local_path(repo_full_name)?, aids, &mut paths)?;
+        }
+    }
+
+    Ok(paths)
+}
+
 /// Look up an article's markdown file inside one archive dir via its index.json.
 fn resolve_article_in_dir(dir: &Path, aid: &str) -> Result<Option<PathBuf>> {
     if !dir.exists() {
@@ -121,6 +138,31 @@ fn resolve_article_in_dir(dir: &Path, aid: &str) -> Result<Option<PathBuf>> {
     }
 
     let index = load_index(dir)?;
+    indexed_article_path(dir, &index, aid)
+}
+
+fn resolve_articles_in_dir(
+    dir: &Path,
+    aids: &[String],
+    paths: &mut HashMap<String, PathBuf>,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    let index = load_index(dir)?;
+    for aid in aids {
+        if paths.contains_key(aid) {
+            continue;
+        }
+        if let Some(path) = indexed_article_path(dir, &index, aid)? {
+            paths.insert(aid.clone(), path);
+        }
+    }
+    Ok(())
+}
+
+fn indexed_article_path(dir: &Path, index: &IndexFile, aid: &str) -> Result<Option<PathBuf>> {
     let Some(article) = index.articles.get(aid) else {
         return Ok(None);
     };
@@ -275,4 +317,73 @@ pub fn ensure_repo_configured(settings: &SyncSettings) -> Result<&str> {
         .repo_full_name
         .as_deref()
         .ok_or_else(|| anyhow!("尚未选择归档仓库，请先在设置中绑定一个 GitHub 仓库。"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn indexed_article(aid: &str, markdown_path: &str) -> IndexArticle {
+        IndexArticle {
+            aid: aid.to_string(),
+            fakeid: "account-id".to_string(),
+            nickname: "手工川".to_string(),
+            title: "测试文章".to_string(),
+            link: "https://mp.weixin.qq.com/s/test".to_string(),
+            digest: None,
+            author: None,
+            create_time: 1_700_000_000,
+            publish_date: "2023-11-14".to_string(),
+            markdown_path: markdown_path.to_string(),
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    #[test]
+    fn bulk_article_paths_resolve_safe_index_entries() {
+        let archive_dir = tempfile::tempdir().expect("temp archive dir");
+        let mut index = IndexFile::default();
+        index.articles.insert(
+            "article-1".to_string(),
+            indexed_article("article-1", "accounts/demo/articles/article-1.md"),
+        );
+        save_index(archive_dir.path(), &index).expect("save archive index");
+
+        let mut paths = HashMap::new();
+        resolve_articles_in_dir(
+            archive_dir.path(),
+            &["article-1".to_string(), "missing".to_string()],
+            &mut paths,
+        )
+        .expect("resolve article paths");
+
+        assert_eq!(
+            paths.get("article-1"),
+            Some(
+                &archive_dir
+                    .path()
+                    .join("accounts/demo/articles/article-1.md")
+            )
+        );
+        assert!(!paths.contains_key("missing"));
+    }
+
+    #[test]
+    fn bulk_article_paths_reject_parent_directory_entries() {
+        let archive_dir = tempfile::tempdir().expect("temp archive dir");
+        let mut index = IndexFile::default();
+        index.articles.insert(
+            "unsafe".to_string(),
+            indexed_article("unsafe", "../escape.md"),
+        );
+        save_index(archive_dir.path(), &index).expect("save archive index");
+
+        let error = resolve_articles_in_dir(
+            archive_dir.path(),
+            &["unsafe".to_string()],
+            &mut HashMap::new(),
+        )
+        .expect_err("unsafe path must be rejected");
+        assert!(error.to_string().contains("路径不安全"));
+    }
 }

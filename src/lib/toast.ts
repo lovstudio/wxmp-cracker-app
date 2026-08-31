@@ -75,10 +75,10 @@ function showWxmpRecoveryToast(
   })
 }
 
-export async function copyText(text: string) {
+export async function copyText(text: string, successMessage = "已复制") {
   try {
     await writeClipboardText(text)
-    sonnerToast.success("已复制")
+    sonnerToast.success(successMessage)
     return true
   } catch {
     // Browser preview has no Tauri plugin, so keep the web clipboard path.
@@ -86,7 +86,7 @@ export async function copyText(text: string) {
 
   try {
     await navigator.clipboard.writeText(text)
-    sonnerToast.success("已复制")
+    sonnerToast.success(successMessage)
     return true
   } catch {
     // Clipboard API may reject writes outside a focused secure context.
@@ -106,7 +106,7 @@ export async function copyText(text: string) {
     if (!copied) {
       throw new Error("document.execCommand returned false")
     }
-    sonnerToast.success("已复制")
+    sonnerToast.success(successMessage)
     return true
   } catch {
     sonnerToast.error("复制失败")

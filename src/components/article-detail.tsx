@@ -18,6 +18,7 @@ import {
 import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
+import { ArticlePublicMetrics } from "@/components/article-public-metrics"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,10 +70,15 @@ export function ArticleDetail({
   const [contextMenu, setContextMenu] = useState<ArticleDetailMenuState | null>(
     null
   )
+  const selectedAidRef = useRef(aid)
   const scrollHostRef = useRef<HTMLDivElement | null>(null)
   const activeScrollAidRef = useRef<string | null>(null)
   const restoringScrollRef = useRef(false)
   const userScrolledAfterRestoreRef = useRef(false)
+
+  useEffect(() => {
+    selectedAidRef.current = aid
+  }, [aid])
 
   useEffect(() => {
     setFetchingContent(false)
@@ -299,22 +305,39 @@ export function ArticleDetail({
     return true
   }
 
-  const openLocalFile = () => {
+  const runLocalFileAction = (
+    action: () => Promise<string>,
+    fallbackMessage: string,
+    afterGenerated?: (path: string) => Promise<unknown> | unknown
+  ) => {
     if (!ensureContent()) return
-    runArticleAction(() => api.openArticleLocalFile(aid), "打开本地文件失败")
+    const actionAid = aid
+    runArticleAction(async () => {
+      const path = await action()
+      if (selectedAidRef.current === actionAid) {
+        setLocalFile({ path, exists: true })
+      }
+      await afterGenerated?.(path)
+    }, fallbackMessage)
+  }
+
+  const openLocalFile = () => {
+    runLocalFileAction(() => api.openArticleLocalFile(aid), "打开本地文件失败")
   }
 
   const revealLocalFile = () => {
-    if (!ensureContent()) return
-    runArticleAction(() => api.revealArticleLocalFile(aid), "Reveal 本地文件失败")
+    runLocalFileAction(
+      () => api.revealArticleLocalFile(aid),
+      "Reveal 本地文件失败"
+    )
   }
 
   const copyLocalFilePath = () => {
-    if (!ensureContent()) return
-    runArticleAction(async () => {
-      const path = await api.exportArticleLocal(aid)
-      await copyText(path)
-    }, "复制本地路径失败")
+    runLocalFileAction(
+      () => api.exportArticleLocal(aid),
+      "复制本地路径失败",
+      copyText
+    )
   }
 
   const copyOriginalLink = () => {
@@ -408,6 +431,7 @@ export function ArticleDetail({
       <div ref={scrollHostRef} className="min-h-0 flex-1">
         <ScrollArea className="h-full">
           <div className="reader-paper">
+            <ArticlePublicMetrics aid={detail.aid} />
             <ArticleBody
               detail={detail}
               fetchingContent={fetchingContent}
@@ -478,25 +502,16 @@ function ArticleDetailActionDropdown({
           <ExternalLinkIcon className="size-4" />
           查看原文
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!canExport}
-          onSelect={onOpenLocalFile}
-        >
+        <DropdownMenuItem disabled={!canExport} onSelect={onOpenLocalFile}>
           <FileTextIcon className="size-4" />
           查看本地文件
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!canExport}
-          onSelect={onRevealLocalFile}
-        >
+        <DropdownMenuItem disabled={!canExport} onSelect={onRevealLocalFile}>
           <FolderOpenIcon className="size-4" />
           Reveal 本地文件
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          disabled={!canExport}
-          onSelect={onCopyLocalFilePath}
-        >
+        <DropdownMenuItem disabled={!canExport} onSelect={onCopyLocalFilePath}>
           <CopyIcon className="size-4" />
           复制本地路径
         </DropdownMenuItem>

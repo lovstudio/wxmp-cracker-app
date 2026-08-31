@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react"
 import {
   AlertCircleIcon,
+  BarChart3Icon,
   CalendarIcon,
+  CheckIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleIcon,
@@ -13,43 +22,88 @@ import {
   FolderOpenIcon,
   HistoryIcon,
   LinkIcon,
+  ListFilterIcon,
   LoaderCircleIcon,
+  PencilIcon,
   PlayCircleIcon,
+  PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  TagIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react"
 import { createPortal } from "react-dom"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import {
   api,
+  notifyArticlePublicMetricsUpdated,
   onFetchAccountProgress,
   type Account,
   type AccountSearchResult,
   type ArticleMatchField,
+  type ArticlePublicMetricsSnapshot,
   type ArticleSummary,
+  type ArticleTag,
   type FetchAccountProgress,
   type FetchMode,
 } from "@/lib/api"
 import { runWithProviderExecutionReport } from "@/lib/gateway"
+import {
+  DEFAULT_ARTICLE_FILTERS,
+  activeArticleFilterCount,
+  articleTagFilterName,
+  articleTagFilterValue,
+  articleTypeBucket,
+  copyrightBucket,
+  filterArticles,
+  filterArticlesByTag,
+  type ArticleFilters,
+  type ArticleTagFilter,
+  type ArticleTypeFilter,
+  type ContentCacheFilter,
+  type CopyrightFilter,
+} from "@/lib/article-filters"
+import {
+  initialResumeProgress,
+  RESUME_MODE_LABELS,
+  type CollectionTask,
+} from "@/lib/article-fetch-progress"
 import { normalizeWechatImageUrl } from "@/lib/media"
-import { copyText, copyableToast as toast } from "@/lib/toast"
+import { copyText, copyableToast as toast, isWxmpAuthError } from "@/lib/toast"
 import { openUrl } from "@tauri-apps/plugin-opener"
 
 interface Props {
   account?: Account | null
   fakeid: string | null
+  wechatLoggedIn: boolean
+  wechatAuthChecking: boolean
   activeAid: string | null
   query?: string
   refreshKey?: number
@@ -57,6 +111,8 @@ interface Props {
   onQueryChange?: (query: string) => void
   onContentFetched?: (aid: string) => void
   onCollectionUpdated?: () => void
+  onWechatLogin: () => void
+  onWechatSessionInvalid: () => void
 }
 
 interface ArticleMenuState {
@@ -71,7 +127,22 @@ interface AuditSelection {
 
 type ProcessStepState = "pending" | "running" | "done" | "warning" | "error"
 
-type CollectionTask = FetchMode | "content"
+type PendingWechatAction =
+  | {
+      kind: "article-content"
+      accountFakeid: string
+      article: ArticleSummary
+    }
+  | {
+      kind: "resume"
+      accountFakeid: string
+      mode: FetchMode
+      auditSelection?: AuditSelection
+    }
+  | {
+      kind: "fill-content"
+      accountFakeid: string
+    }
 
 const MAX_RESUME_PROGRESS_EVENTS = 24
 const DEFAULT_FETCH_LIMIT = 10
@@ -81,16 +152,11 @@ const CONTENT_SEARCH_DEBOUNCE_MS = 220
 const CONTENT_FILL_INTERVAL_MS = 1200
 const MAX_CONTENT_FILL_FAILURES = 3
 
-const RESUME_MODE_LABELS: Record<CollectionTask, string> = {
-  forward: "向前续抓",
-  backward: "向后续抓",
-  audit: "完备性回扫",
-  content: "补齐正文",
-}
-
 export function ArticleList({
   account,
   fakeid,
+  wechatLoggedIn,
+  wechatAuthChecking,
   activeAid,
   query,
   refreshKey = 0,
@@ -98,6 +164,8 @@ export function ArticleList({
   onQueryChange,
   onContentFetched,
   onCollectionUpdated,
+  onWechatLogin,
+  onWechatSessionInvalid,
 }: Props) {
   const [items, setItems] = useState<ArticleSummary[]>([])
   const [loading, setLoading] = useState(false)
@@ -117,11 +185,29 @@ export function ArticleList({
   const [uncontrolledQuery, setUncontrolledQuery] = useState("")
   const [menu, setMenu] = useState<ArticleMenuState | null>(null)
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
+  const [metricsUpdatingAid, setMetricsUpdatingAid] = useState<string | null>(
+    null
+  )
   const [searchItems, setSearchItems] = useState<ArticleSummary[]>([])
   const [searching, setSearching] = useState(false)
   const [searchedQuery, setSearchedQuery] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
   const [contentSearchVersion, setContentSearchVersion] = useState(0)
+  const [pendingWechatAction, setPendingWechatAction] =
+    useState<PendingWechatAction | null>(null)
+  const [tagDialog, setTagDialog] = useState<{
+    article: ArticleSummary
+    focusCreate: boolean
+  } | null>(null)
+  const [tagOptions, setTagOptions] = useState<ArticleTag[]>([])
+  const [tagsLoading, setTagsLoading] = useState(false)
+  const [tagError, setTagError] = useState<string | null>(null)
+  const [tagActionKey, setTagActionKey] = useState<string | null>(null)
+  const [articleFilters, setArticleFilters] = useState<ArticleFilters>(
+    DEFAULT_ARTICLE_FILTERS
+  )
+  const [articleTagFilter, setArticleTagFilter] =
+    useState<ArticleTagFilter>("all")
   const selectedAccount = account?.fakeid === fakeid ? account : null
   const q = query ?? uncontrolledQuery
   const resumeActiveRef = useRef(false)
@@ -132,6 +218,10 @@ export function ArticleList({
       setUncontrolledQuery(nextQuery)
     }
     onQueryChange?.(nextQuery)
+  }
+  const resetArticleFilters = () => {
+    setArticleFilters(DEFAULT_ARTICLE_FILTERS)
+    setArticleTagFilter("all")
   }
 
   useEffect(() => {
@@ -155,6 +245,43 @@ export function ArticleList({
     }
   }, [menu])
 
+  const activeTagArticleAid =
+    tagDialog?.article.aid ?? menu?.article.aid ?? null
+  useEffect(() => {
+    if (!activeTagArticleAid) {
+      setTagOptions([])
+      setTagError(null)
+      setTagsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setTagsLoading(true)
+    setTagError(null)
+    api
+      .listArticleTags(activeTagArticleAid)
+      .then((tags) => {
+        if (!cancelled) setTagOptions(tags)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setTagOptions([])
+        setTagError(errorMessage(error))
+      })
+      .finally(() => {
+        if (!cancelled) setTagsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTagArticleAid])
+
+  useEffect(() => {
+    setArticleFilters(DEFAULT_ARTICLE_FILTERS)
+    setArticleTagFilter("all")
+  }, [fakeid])
+
   useEffect(() => {
     if (!fakeid) {
       setItems([])
@@ -166,9 +293,10 @@ export function ArticleList({
     }
     let cancelled = false
     setLoading(true)
-    api
-      .listArticles(fakeid)
-      .then((r) => !cancelled && setItems(r))
+    listArticlesWithTags(fakeid)
+      .then((articles) => {
+        if (!cancelled) setItems(articles)
+      })
       .catch(() => !cancelled && setItems([]))
       .finally(() => !cancelled && setLoading(false))
     return () => {
@@ -274,16 +402,48 @@ export function ArticleList({
     )
   }, [items, trimmedQuery])
 
-  const filtered =
-    trimmedQuery && searchedQuery === trimmedQuery && !searchError
-      ? searchItems
-      : localFiltered
-  const showCollectionBoundaries = Boolean(fakeid && !loading && !trimmedQuery)
+  const matchedArticles = useMemo(() => {
+    if (!(trimmedQuery && searchedQuery === trimmedQuery && !searchError)) {
+      return localFiltered
+    }
+
+    const tagsByAid = Object.fromEntries(
+      items.map((article) => [article.aid, article.tags ?? []])
+    )
+    return attachArticleTags(searchItems, tagsByAid)
+  }, [
+    items,
+    localFiltered,
+    searchError,
+    searchItems,
+    searchedQuery,
+    trimmedQuery,
+  ])
+  const activeFilterCount =
+    activeArticleFilterCount(articleFilters) +
+    (articleTagFilter === "all" ? 0 : 1)
+  const filtered = useMemo(
+    () =>
+      filterArticlesByTag(
+        filterArticles(matchedArticles, articleFilters),
+        articleTagFilter
+      ),
+    [articleFilters, articleTagFilter, matchedArticles]
+  )
+  const activeFilterLabels = articleFilterLabels(
+    articleFilters,
+    articleTagFilter
+  )
+  const showCollectionBoundaries = Boolean(
+    fakeid && !loading && !trimmedQuery && activeFilterCount === 0
+  )
   const resumeBatchSize = parseFetchLimitInput(resumeBatchInput)
   const resumeFetchLimit = nextResumeFetchLimit(items.length, resumeBatchSize)
   const collectionBusy = Boolean(fetchingAid) || resuming
+  const fetchActionsBlocked =
+    collectionBusy || wechatAuthChecking || pendingWechatAction !== null
   const canRunCollectionAction =
-    Boolean(selectedAccount) && !loading && !collectionBusy
+    Boolean(selectedAccount) && !loading && !fetchActionsBlocked
   const canResume = canRunCollectionAction && items.length < MAX_RESUME_LIMIT
   const canAudit = canRunCollectionAction && items.length > 0
 
@@ -293,6 +453,188 @@ export function ArticleList({
   )
   const missingContentCount = items.length - cachedCount
   const canFillContent = canRunCollectionAction && missingContentCount > 0
+  const missingClassificationCount = useMemo(
+    () =>
+      items.filter(
+        (item) => item.article_type == null || item.copyright_type == null
+      ).length,
+    [items]
+  )
+  const canBackfillClassifications =
+    canRunCollectionAction && missingClassificationCount > 0
+
+  const queueWechatAction = (
+    action: PendingWechatAction,
+    sessionInvalid = false
+  ) => {
+    setPendingWechatAction(action)
+    setResumeDialogOpen(false)
+    setResumeProgressEvents([])
+    if (sessionInvalid) onWechatSessionInvalid()
+    else onWechatLogin()
+  }
+
+  const reloadArticleTags = async (aid: string) => {
+    const tags = await api.listArticleTags(aid)
+    setTagOptions(tags)
+    setTagError(null)
+  }
+
+  const updateArticleTagAssignment = async (
+    article: ArticleSummary,
+    tag: ArticleTag,
+    assigned: boolean
+  ) => {
+    if (tagActionKey) return false
+    const actionKey = `toggle:${tag.id}`
+    setTagActionKey(actionKey)
+    setTagError(null)
+    setTagOptions((current) =>
+      current.map((item) =>
+        item.id === tag.id
+          ? {
+              ...item,
+              assigned,
+              article_count: Math.max(
+                0,
+                item.article_count + (assigned ? 1 : -1)
+              ),
+            }
+          : item
+      )
+    )
+    try {
+      await api.setArticleTag(article.aid, tag.id, assigned)
+      setItems((current) =>
+        current.map((item) => {
+          if (item.aid !== article.aid) return item
+          const tags = new Set(item.tags ?? [])
+          if (assigned) tags.add(tag.name)
+          else tags.delete(tag.name)
+          return { ...item, tags: sortedTags(tags) }
+        })
+      )
+      return true
+    } catch (error) {
+      const message = errorMessage(error)
+      setTagError(message)
+      setTagOptions((current) =>
+        current.map((item) =>
+          item.id === tag.id
+            ? {
+                ...item,
+                assigned: tag.assigned,
+                article_count: tag.article_count,
+              }
+            : item
+        )
+      )
+      toast.error(`更新标签失败：${message}`)
+      return false
+    } finally {
+      setTagActionKey(null)
+    }
+  }
+
+  const createAndAssignArticleTag = async (
+    article: ArticleSummary,
+    name: string
+  ) => {
+    if (tagActionKey) return false
+    setTagActionKey("create")
+    setTagError(null)
+    try {
+      const tag = await api.createAndAssignArticleTag(article.aid, name)
+      await reloadArticleTags(article.aid)
+      setItems((current) =>
+        current.map((item) =>
+          item.aid === article.aid
+            ? {
+                ...item,
+                tags: sortedTags(new Set([...(item.tags ?? []), tag.name])),
+              }
+            : item
+        )
+      )
+      toast.success(`已新建并添加标签“${tag.name}”`)
+      return true
+    } catch (error) {
+      const message = errorMessage(error)
+      setTagError(message)
+      toast.error(`新建标签失败：${message}`)
+      return false
+    } finally {
+      setTagActionKey(null)
+    }
+  }
+
+  const renameArticleTag = async (tag: ArticleTag, name: string) => {
+    if (tagActionKey) return false
+    setTagActionKey(`rename:${tag.id}`)
+    setTagError(null)
+    try {
+      const updated = await api.updateArticleTag(tag.id, name)
+      setTagOptions((current) =>
+        current.map((item) =>
+          item.id === tag.id ? { ...item, name: updated.name } : item
+        )
+      )
+      setItems((current) =>
+        current.map((item) => ({
+          ...item,
+          tags: sortedTags(
+            new Set(
+              (item.tags ?? []).map((name) =>
+                name === tag.name ? updated.name : name
+              )
+            )
+          ),
+        }))
+      )
+      setArticleTagFilter((current) =>
+        current === articleTagFilterValue(tag.name)
+          ? articleTagFilterValue(updated.name)
+          : current
+      )
+      toast.success(`标签已重命名为“${updated.name}”`)
+      return true
+    } catch (error) {
+      const message = errorMessage(error)
+      setTagError(message)
+      toast.error(`编辑标签失败：${message}`)
+      return false
+    } finally {
+      setTagActionKey(null)
+    }
+  }
+
+  const removeArticleTag = async (tag: ArticleTag) => {
+    if (tagActionKey) return false
+    setTagActionKey(`delete:${tag.id}`)
+    setTagError(null)
+    try {
+      await api.deleteArticleTag(tag.id)
+      setTagOptions((current) => current.filter((item) => item.id !== tag.id))
+      setItems((current) =>
+        current.map((item) => ({
+          ...item,
+          tags: (item.tags ?? []).filter((name) => name !== tag.name),
+        }))
+      )
+      setArticleTagFilter((current) =>
+        current === articleTagFilterValue(tag.name) ? "all" : current
+      )
+      toast.success(`已删除标签“${tag.name}”`)
+      return true
+    } catch (error) {
+      const message = errorMessage(error)
+      setTagError(message)
+      toast.error(`删除标签失败：${message}`)
+      return false
+    } finally {
+      setTagActionKey(null)
+    }
+  }
 
   const revealArchiveFolder = async () => {
     try {
@@ -320,11 +662,10 @@ export function ArticleList({
     }
   }
 
-  const fetchArticleContent = async (article: ArticleSummary) => {
+  const runFetchArticleContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
 
     setFetchingAid(article.aid)
-    toast.info(article.has_content ? "正在重新抓取正文" : "正在抓取正文")
     try {
       const updated = await runWithProviderExecutionReport(
         {
@@ -350,22 +691,94 @@ export function ArticleList({
       toast.success(
         article.has_content ? "正文已重新抓取" : "正文已抓取并写入缓存"
       )
-    } catch (e) {
-      toast.wxmpError(errorMessage(e), api.openLogin)
+    } catch (error) {
+      const message = errorMessage(error)
+      if (isWxmpAuthError(message)) {
+        queueWechatAction(
+          {
+            kind: "article-content",
+            accountFakeid: article.fakeid,
+            article,
+          },
+          true
+        )
+        return
+      }
+      toast.wxmpError(message, api.openLogin)
     } finally {
       setFetchingAid(null)
     }
   }
 
-  const resumeCollection = async (
+  const fetchArticleContent = async (article: ArticleSummary) => {
+    if (wechatAuthChecking) return
+    if (!wechatLoggedIn) {
+      queueWechatAction({
+        kind: "article-content",
+        accountFakeid: article.fakeid,
+        article,
+      })
+      return
+    }
+
+    await runFetchArticleContent(article)
+  }
+
+  const updateArticlePublicMetrics = async (article: ArticleSummary) => {
+    if (metricsUpdatingAid) return
+    const startedAt = performance.now()
+    console.log("[DEBUG][article-public-metrics] list update entry:", {
+      aid: article.aid,
+    })
+    setMetricsUpdatingAid(article.aid)
+    try {
+      const snapshot = await api.captureArticlePublicMetrics(article.aid)
+      console.log("[DEBUG][article-public-metrics] list update success:", {
+        aid: article.aid,
+        sourceKind: snapshot.source_kind,
+        captureMethod: snapshot.capture_method,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      })
+      notifyArticlePublicMetricsUpdated(snapshot)
+      toast.success(formatMetricsUpdateToast(snapshot))
+    } catch (error) {
+      console.log("[DEBUG][article-public-metrics] list update failed:", {
+        aid: article.aid,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        error: errorMessage(error),
+      })
+      toast.error(`更新阅读量相关数据失败：${errorMessage(error)}`)
+    } finally {
+      console.log("[DEBUG][article-public-metrics] list update settled:", {
+        aid: article.aid,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      })
+      setMetricsUpdatingAid(null)
+    }
+  }
+
+  const runResumeCollection = async (
     mode: FetchMode,
     auditSelection?: AuditSelection
   ) => {
     if (!selectedAccount) return
-    if (mode === "audit" ? !canAudit : !canResume) return
+    if (loading || collectionBusy) return
+    if (
+      mode === "audit" || mode === "classify"
+        ? items.length === 0
+        : items.length >= MAX_RESUME_LIMIT
+    ) {
+      return
+    }
 
     const initialCount = items.length
-    const targetLimit = mode === "audit" ? MAX_RESUME_LIMIT : resumeFetchLimit
+    const initialMissingClassifications = missingClassificationCount
+    const targetLimit =
+      mode === "audit"
+        ? MAX_RESUME_LIMIT
+        : mode === "classify"
+          ? Math.min(items.length, MAX_RESUME_LIMIT)
+          : resumeFetchLimit
     const label = RESUME_MODE_LABELS[mode]
     const auditDate = mode === "audit" ? (auditSelection?.date ?? null) : null
     const startEvent = initialResumeProgress(
@@ -382,11 +795,6 @@ export function ArticleList({
     setCancellingResume(false)
     setResumeDialogOpen(true)
     setResuming(true)
-    toast.info(
-      mode === "audit"
-        ? `正在检测 ${selectedAccount.nickname}${formatAuditDatePhrase(auditDate)}的文章完备性`
-        : `正在${label} ${selectedAccount.nickname}，本次 ${targetLimit} 篇`
-    )
     try {
       await api.fetchSelectedAccount(
         accountToSearchResult(selectedAccount),
@@ -395,7 +803,7 @@ export function ArticleList({
         mode,
         auditDate
       )
-      const updatedItems = await api.listArticles(selectedAccount.fakeid)
+      const updatedItems = await listArticlesWithTags(selectedAccount.fakeid)
       const sortedItems = [...updatedItems].sort(
         (a, b) => b.create_time - a.create_time
       )
@@ -403,14 +811,25 @@ export function ArticleList({
       setContentSearchVersion((current) => current + 1)
       onCollectionUpdated?.()
       const addedCount = sortedItems.length - initialCount
+      const remainingClassifications = sortedItems.filter(
+        (item) => item.article_type == null || item.copyright_type == null
+      ).length
+      const filledClassifications = Math.max(
+        initialMissingClassifications - remainingClassifications,
+        0
+      )
       const successMessage =
         mode === "audit"
           ? addedCount > 0
             ? `${formatAuditDateScope(auditDate)}完备性检测完成，补漏 ${addedCount} 篇`
             : `${formatAuditDateScope(auditDate)}完备性检测完成，未发现遗漏`
-          : addedCount > 0
-            ? `${label}完成，新增 ${addedCount} 篇索引`
-            : `${label}完成，当前没有新增文章`
+          : mode === "classify"
+            ? remainingClassifications > 0
+              ? `${label}完成，补齐 ${filledClassifications} 篇，仍有 ${remainingClassifications} 篇未提供完整分类`
+              : `${label}完成，${filledClassifications} 篇旧数据已补齐`
+            : addedCount > 0
+              ? `${label}完成，新增 ${addedCount} 篇索引`
+              : `${label}完成，当前没有新增文章`
       setResumeProgressEvents((current) =>
         appendProgressEvent(current, {
           fakeid: selectedAccount.fakeid,
@@ -423,9 +842,20 @@ export function ArticleList({
           title: null,
         })
       )
-      toast.success(successMessage)
     } catch (error) {
       const message = errorMessage(error)
+      if (isWxmpAuthError(message)) {
+        queueWechatAction(
+          {
+            kind: "resume",
+            accountFakeid: selectedAccount.fakeid,
+            mode,
+            auditSelection,
+          },
+          true
+        )
+        return
+      }
       if (isFetchInterruptedMessage(message)) {
         const interruptedMessage =
           mode === "audit" ? "完备性检测已打断" : `${label}已打断`
@@ -442,7 +872,9 @@ export function ArticleList({
           })
         )
         try {
-          const updatedItems = await api.listArticles(selectedAccount.fakeid)
+          const updatedItems = await listArticlesWithTags(
+            selectedAccount.fakeid
+          )
           const sortedItems = sortedArticlesByCreateTime(updatedItems)
           setItems(sortedItems)
           setContentSearchVersion((current) => current + 1)
@@ -453,7 +885,6 @@ export function ArticleList({
             refreshError
           )
         }
-        toast.info(interruptedMessage)
         return
       }
       setResumeProgressEvents((current) =>
@@ -468,7 +899,6 @@ export function ArticleList({
           title: null,
         })
       )
-      toast.wxmpError(message, api.openLogin)
     } finally {
       resumeActiveRef.current = false
       setResuming(false)
@@ -476,8 +906,26 @@ export function ArticleList({
     }
   }
 
-  const fillMissingContents = async () => {
-    if (!selectedAccount || !canFillContent) return
+  const resumeCollection = async (
+    mode: FetchMode,
+    auditSelection?: AuditSelection
+  ) => {
+    if (!selectedAccount || wechatAuthChecking) return
+    if (!wechatLoggedIn) {
+      queueWechatAction({
+        kind: "resume",
+        accountFakeid: selectedAccount.fakeid,
+        mode,
+        auditSelection,
+      })
+      return
+    }
+
+    await runResumeCollection(mode, auditSelection)
+  }
+
+  const runFillMissingContents = async () => {
+    if (!selectedAccount || loading || collectionBusy) return
 
     const missing = sortedArticlesByCreateTime(items).filter(
       (item) => !item.has_content
@@ -501,21 +949,11 @@ export function ArticleList({
     setResumeLimit(total)
     setResumeAuditDate(null)
     setResumeProgressEvents([
-      {
-        fakeid: selectedAccount.fakeid,
-        nickname: selectedAccount.nickname,
-        stage: "prepare",
-        status: "done",
-        message: `共 ${total.toLocaleString()} 篇文章缺失正文，开始补齐`,
-        current: 0,
-        total,
-        title: null,
-      },
+      initialResumeProgress(selectedAccount, total, "content"),
     ])
     setCancellingResume(false)
     setResumeDialogOpen(true)
     setResuming(true)
-    toast.info(`正在补齐 ${selectedAccount.nickname} 的 ${total} 篇正文`)
 
     let succeeded = 0
     let failed = 0
@@ -572,12 +1010,23 @@ export function ArticleList({
             title: article.title,
           })
         } catch (error) {
+          const message = errorMessage(error)
+          if (isWxmpAuthError(message)) {
+            queueWechatAction(
+              {
+                kind: "fill-content",
+                accountFakeid: selectedAccount.fakeid,
+              },
+              true
+            )
+            return
+          }
           failed += 1
           consecutiveFailures += 1
           pushEvent({
             stage: "content",
             status: "warning",
-            message: `抓取失败：${errorMessage(error)}`,
+            message: `抓取失败：${message}`,
             current: index + 1,
             total,
             title: article.title,
@@ -591,7 +1040,6 @@ export function ArticleList({
               total,
               title: null,
             })
-            toast.wxmpError(errorMessage(error), api.openLogin)
             return
           }
         }
@@ -610,8 +1058,6 @@ export function ArticleList({
         total,
         title: null,
       })
-      if (interrupted) toast.info(message)
-      else toast.success(message)
     } finally {
       if (succeeded > 0) setContentSearchVersion((current) => current + 1)
       setFetchingAid(null)
@@ -619,6 +1065,53 @@ export function ArticleList({
       setCancellingResume(false)
     }
   }
+
+  const fillMissingContents = async () => {
+    if (!selectedAccount || wechatAuthChecking) return
+    if (!wechatLoggedIn) {
+      queueWechatAction({
+        kind: "fill-content",
+        accountFakeid: selectedAccount.fakeid,
+      })
+      return
+    }
+
+    await runFillMissingContents()
+  }
+
+  const pendingWechatActionRunnerRef = useRef<
+    (action: PendingWechatAction) => void
+  >(() => undefined)
+  useEffect(() => {
+    pendingWechatActionRunnerRef.current = (action) => {
+      if (action.accountFakeid !== selectedAccount?.fakeid) return
+
+      if (action.kind === "article-content") {
+        void runFetchArticleContent(action.article)
+        return
+      }
+      if (action.kind === "resume") {
+        void runResumeCollection(action.mode, action.auditSelection)
+        return
+      }
+      void runFillMissingContents()
+    }
+  })
+
+  useEffect(() => {
+    if (
+      !wechatLoggedIn ||
+      wechatAuthChecking ||
+      collectionBusy ||
+      !pendingWechatAction
+    ) {
+      return
+    }
+
+    const action = pendingWechatAction
+    setPendingWechatAction(null)
+    queueMicrotask(() => pendingWechatActionRunnerRef.current(action))
+  }, [collectionBusy, pendingWechatAction, wechatAuthChecking, wechatLoggedIn])
 
   const interruptResume = async () => {
     if (!selectedAccount || !resuming || cancellingResume) {
@@ -771,19 +1264,62 @@ export function ArticleList({
             </DropdownMenu>
           </div>
         </div>
-        <div className="search-shell relative rounded-lg">
-          <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => updateQuery(e.target.value)}
-            placeholder={fakeid ? "搜索标题、摘要或正文" : "请先选择公众号"}
-            disabled={!fakeid}
-            className="h-9 border-0 bg-transparent pr-8 pl-9 focus-visible:ring-1"
+        <div className="flex min-w-0 items-stretch gap-2">
+          <div className="search-shell relative min-w-0 flex-1 rounded-lg">
+            <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => updateQuery(e.target.value)}
+              placeholder={fakeid ? "搜索标题、摘要或正文" : "请先选择公众号"}
+              disabled={!fakeid}
+              className="h-9 border-0 bg-transparent pr-8 pl-9 focus-visible:ring-1"
+            />
+            {searching && trimmedQuery && (
+              <LoaderCircleIcon className="absolute top-1/2 right-3 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          <ArticleFilterMenu
+            filters={articleFilters}
+            tagFilter={articleTagFilter}
+            candidates={matchedArticles}
+            activeCount={activeFilterCount}
+            disabled={!fakeid || loading}
+            missingClassificationCount={missingClassificationCount}
+            classificationBusy={resuming && resumeMode === "classify"}
+            canBackfillClassifications={canBackfillClassifications}
+            onChange={setArticleFilters}
+            onTagFilterChange={setArticleTagFilter}
+            onReset={resetArticleFilters}
+            onBackfillClassifications={() => void resumeCollection("classify")}
           />
-          {searching && trimmedQuery && (
-            <LoaderCircleIcon className="absolute top-1/2 right-3 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
-          )}
         </div>
+        {activeFilterLabels.length > 0 && (
+          <div
+            className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5"
+            aria-label="当前文章筛选条件"
+          >
+            <span className="mr-0.5 text-[11px] text-muted-foreground">
+              已筛选
+            </span>
+            {activeFilterLabels.map((label) => (
+              <span
+                key={label}
+                className="inline-flex h-6 items-center rounded-md border border-primary/25 bg-primary/10 px-2 text-[11px] font-medium text-primary"
+              >
+                {label}
+              </span>
+            ))}
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={resetArticleFilters}
+            >
+              清除
+            </Button>
+          </div>
+        )}
         {searchError && trimmedQuery && (
           <div className="mt-2 text-[11px] text-destructive">
             全文检索失败，已退回标题/摘要搜索
@@ -826,13 +1362,30 @@ export function ArticleList({
           <div className="m-4 flex flex-col items-center rounded-lg border border-border/70 px-6 py-10 text-center">
             <FileX2Icon className="mb-3 size-8 text-muted-foreground" />
             <div className="text-sm font-medium">
-              {items.length === 0 ? "暂无缓存文章" : "没有匹配结果"}
+              {items.length === 0
+                ? "暂无缓存文章"
+                : activeFilterCount > 0
+                  ? "筛选条件下无结果"
+                  : "没有匹配结果"}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {items.length === 0
                 ? "当前公众号还没有本地记录"
-                : "换个关键词试试"}
+                : activeFilterCount > 0
+                  ? "调整条件，或清除筛选查看全部文章"
+                  : "换个关键词试试"}
             </div>
+            {items.length > 0 && activeFilterCount > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-4"
+                onClick={resetArticleFilters}
+              >
+                清除筛选
+              </Button>
+            )}
             {items.length === 0 && !trimmedQuery && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                 <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -984,12 +1537,47 @@ export function ArticleList({
           menu={menu}
           accountName={selectedAccount?.nickname ?? null}
           fetchingAid={fetchingAid}
-          busy={collectionBusy}
+          metricsUpdatingAid={metricsUpdatingAid}
+          busy={fetchActionsBlocked}
+          tags={tagOptions}
+          tagsLoading={tagsLoading}
+          tagError={tagError}
+          tagActionKey={tagActionKey}
           onClose={() => setMenu(null)}
           onSelect={() => onSelect(menu.article.aid)}
           onFetchContent={fetchArticleContent}
+          onUpdateMetrics={updateArticlePublicMetrics}
+          onToggleTag={(tag, assigned) =>
+            updateArticleTagAssignment(menu.article, tag, assigned)
+          }
+          onCreateTag={() =>
+            setTagDialog({ article: menu.article, focusCreate: true })
+          }
+          onManageTags={() =>
+            setTagDialog({ article: menu.article, focusCreate: false })
+          }
         />
       )}
+      {tagDialog ? (
+        <ArticleTagDialog
+          key={tagDialog.article.aid}
+          article={tagDialog.article}
+          focusCreate={tagDialog.focusCreate}
+          tags={tagOptions}
+          loading={tagsLoading}
+          error={tagError}
+          actionKey={tagActionKey}
+          onClose={() => setTagDialog(null)}
+          onCreate={(name) =>
+            createAndAssignArticleTag(tagDialog.article, name)
+          }
+          onToggle={(tag, assigned) =>
+            updateArticleTagAssignment(tagDialog.article, tag, assigned)
+          }
+          onRename={renameArticleTag}
+          onDelete={removeArticleTag}
+        />
+      ) : null}
       {auditDialogOpen && selectedAccount ? (
         <AuditDateDialog
           account={selectedAccount}
@@ -1017,6 +1605,391 @@ export function ArticleList({
       ) : null}
     </aside>
   )
+}
+
+function ArticleFilterMenu({
+  filters,
+  tagFilter,
+  candidates,
+  activeCount,
+  disabled,
+  missingClassificationCount,
+  classificationBusy,
+  canBackfillClassifications,
+  onChange,
+  onTagFilterChange,
+  onReset,
+  onBackfillClassifications,
+}: {
+  filters: ArticleFilters
+  tagFilter: ArticleTagFilter
+  candidates: ArticleSummary[]
+  activeCount: number
+  disabled: boolean
+  missingClassificationCount: number
+  classificationBusy: boolean
+  canBackfillClassifications: boolean
+  onChange: (filters: ArticleFilters) => void
+  onTagFilterChange: (tagFilter: ArticleTagFilter) => void
+  onReset: () => void
+  onBackfillClassifications: () => void
+}) {
+  const articleTypeCounts = {
+    all: candidates.length,
+    article: candidates.filter(
+      (article) => articleTypeBucket(article.article_type) === "article"
+    ).length,
+    sticker: candidates.filter(
+      (article) => articleTypeBucket(article.article_type) === "sticker"
+    ).length,
+    other: candidates.filter(
+      (article) => articleTypeBucket(article.article_type) === "other"
+    ).length,
+  }
+  const copyrightCounts = {
+    all: candidates.length,
+    original: candidates.filter(
+      (article) => copyrightBucket(article.copyright_type) === "original"
+    ).length,
+    reprint: candidates.filter(
+      (article) => copyrightBucket(article.copyright_type) === "reprint"
+    ).length,
+    default: candidates.filter(
+      (article) => copyrightBucket(article.copyright_type) === "default"
+    ).length,
+    unknown: candidates.filter(
+      (article) => copyrightBucket(article.copyright_type) === "unknown"
+    ).length,
+  }
+  const cacheCounts = {
+    all: candidates.length,
+    cached: candidates.filter((article) => article.has_content).length,
+    missing: candidates.filter((article) => !article.has_content).length,
+  }
+  const candidateTagSets = candidates.map((article) =>
+    Array.from(
+      new Set((article.tags ?? []).map((tag) => tag.trim()).filter(Boolean))
+    )
+  )
+  const tagCounts = new Map<string, number>()
+  candidateTagSets.forEach((tags) => {
+    tags.forEach((tag) => tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1))
+  })
+  const selectedTagName = articleTagFilterName(tagFilter)
+  const tagOptions = Array.from(tagCounts.entries()).sort(([left], [right]) =>
+    left.localeCompare(right, "zh-CN")
+  )
+  if (selectedTagName && !tagCounts.has(selectedTagName)) {
+    tagOptions.unshift([selectedTagName, 0])
+  }
+  const taggedCount = candidateTagSets.filter((tags) => tags.length > 0).length
+  const tagFilterLabel =
+    selectedTagName ??
+    (tagFilter === "tagged"
+      ? "有标签"
+      : tagFilter === "untagged"
+        ? "无标签"
+        : "全部")
+  const triggerLabel =
+    activeCount > 0 ? `筛选文章，已启用 ${activeCount} 项` : "筛选文章"
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-lg"
+          variant="outline"
+          disabled={disabled}
+          aria-label={triggerLabel}
+          aria-pressed={activeCount > 0}
+          title={triggerLabel}
+          className={cn(
+            "relative",
+            activeCount > 0 &&
+              "border-primary/35 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+          )}
+        >
+          <ListFilterIcon className="size-4" />
+          {activeCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-primary text-[9px] leading-none font-semibold text-primary-foreground ring-2 ring-background">
+              {activeCount}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>内容形态</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filters.articleType}
+          onValueChange={(value) =>
+            onChange({
+              ...filters,
+              articleType: value as ArticleTypeFilter,
+            })
+          }
+        >
+          <ArticleFilterRadioItem
+            value="all"
+            label="全部"
+            count={articleTypeCounts.all}
+          />
+          <ArticleFilterRadioItem
+            value="article"
+            label="图文"
+            count={articleTypeCounts.article}
+          />
+          <ArticleFilterRadioItem
+            value="sticker"
+            label="贴图"
+            count={articleTypeCounts.sticker}
+          />
+          <ArticleFilterRadioItem
+            value="other"
+            label="其他 / 未标注"
+            count={articleTypeCounts.other}
+          />
+        </DropdownMenuRadioGroup>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>版权属性</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filters.copyright}
+          onValueChange={(value) =>
+            onChange({
+              ...filters,
+              copyright: value as CopyrightFilter,
+            })
+          }
+        >
+          <ArticleFilterRadioItem
+            value="all"
+            label="全部"
+            count={copyrightCounts.all}
+          />
+          <ArticleFilterRadioItem
+            value="original"
+            label="原创"
+            count={copyrightCounts.original}
+          />
+          <ArticleFilterRadioItem
+            value="reprint"
+            label="转载"
+            count={copyrightCounts.reprint}
+          />
+          <ArticleFilterRadioItem
+            value="default"
+            label="默认"
+            count={copyrightCounts.default}
+          />
+          <ArticleFilterRadioItem
+            value="unknown"
+            label="未标注"
+            count={copyrightCounts.unknown}
+          />
+        </DropdownMenuRadioGroup>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>正文状态</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filters.contentCache}
+          onValueChange={(value) =>
+            onChange({
+              ...filters,
+              contentCache: value as ContentCacheFilter,
+            })
+          }
+        >
+          <ArticleFilterRadioItem
+            value="all"
+            label="全部"
+            count={cacheCounts.all}
+          />
+          <ArticleFilterRadioItem
+            value="cached"
+            label="已抓取正文"
+            count={cacheCounts.cached}
+          />
+          <ArticleFilterRadioItem
+            value="missing"
+            label="缺少正文"
+            count={cacheCounts.missing}
+          />
+        </DropdownMenuRadioGroup>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <TagIcon className="size-4" />
+            <span className="min-w-0 flex-1">标签</span>
+            <span className="max-w-24 truncate text-[11px] text-muted-foreground">
+              {tagFilterLabel}
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="max-h-[min(70vh,24rem)] w-64 overflow-y-auto">
+            <DropdownMenuLabel>文章标签</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={tagFilter}
+              onValueChange={(value) =>
+                onTagFilterChange(value as ArticleTagFilter)
+              }
+            >
+              <ArticleFilterRadioItem
+                value="all"
+                label="全部"
+                count={candidates.length}
+              />
+              <ArticleFilterRadioItem
+                value="tagged"
+                label="有标签"
+                count={taggedCount}
+              />
+              <ArticleFilterRadioItem
+                value="untagged"
+                label="无标签"
+                count={candidates.length - taggedCount}
+              />
+              {tagOptions.length > 0 && <DropdownMenuSeparator />}
+              {tagOptions.map(([tag, count]) => (
+                <ArticleFilterRadioItem
+                  key={tag}
+                  value={articleTagFilterValue(tag)}
+                  label={tag}
+                  count={count}
+                />
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+
+        {missingClassificationCount > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                onBackfillClassifications()
+              }}
+              disabled={!canBackfillClassifications}
+            >
+              {classificationBusy ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : (
+                <RefreshCwIcon className="size-4" />
+              )}
+              <div className="flex min-w-0 flex-col">
+                <span>补齐旧数据分类</span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  {classificationBusy
+                    ? "正在从公众号元数据回填"
+                    : `${missingClassificationCount.toLocaleString()} 篇当前未标注，将按真实元数据回填`}
+                </span>
+              </div>
+            </DropdownMenuItem>
+          </>
+        )}
+
+        {activeCount > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onReset}>
+              <XIcon className="size-4" />
+              清除全部筛选
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function ArticleFilterRadioItem({
+  value,
+  label,
+  count,
+}: {
+  value: string
+  label: string
+  count: number
+}) {
+  return (
+    <DropdownMenuRadioItem
+      value={value}
+      onSelect={(event) => event.preventDefault()}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="mr-4 font-mono text-[11px] text-muted-foreground">
+        {count.toLocaleString()}
+      </span>
+    </DropdownMenuRadioItem>
+  )
+}
+
+function articleFilterLabels(
+  filters: ArticleFilters,
+  tagFilter: ArticleTagFilter
+) {
+  const labels: string[] = []
+  if (filters.articleType !== "all") {
+    labels.push(
+      {
+        article: "形态：图文",
+        sticker: "形态：贴图",
+        other: "形态：其他 / 未标注",
+      }[filters.articleType]
+    )
+  }
+  if (filters.copyright !== "all") {
+    labels.push(
+      {
+        default: "版权：默认",
+        original: "版权：原创",
+        reprint: "版权：转载",
+        unknown: "版权：未标注",
+      }[filters.copyright]
+    )
+  }
+  if (filters.contentCache !== "all") {
+    labels.push(
+      filters.contentCache === "cached" ? "正文：已抓取" : "正文：缺失"
+    )
+  }
+  if (tagFilter !== "all") {
+    const tagName = articleTagFilterName(tagFilter)
+    labels.push(
+      tagName
+        ? `标签：${tagName}`
+        : tagFilter === "tagged"
+          ? "标签：有标签"
+          : "标签：无标签"
+    )
+  }
+  return labels
+}
+
+async function listArticlesWithTags(fakeid: string) {
+  const [articles, tagsByAid] = await Promise.all([
+    api.listArticles(fakeid),
+    api.listArticleTagNames(fakeid),
+  ])
+  return attachArticleTags(articles, tagsByAid)
+}
+
+function attachArticleTags(
+  articles: ArticleSummary[],
+  tagsByAid: Record<string, string[]>
+) {
+  return articles.map((article) => ({
+    ...article,
+    tags: sortedTags(new Set(tagsByAid[article.aid] ?? article.tags ?? [])),
+  }))
+}
+
+function sortedTags(tags: Set<string>) {
+  return Array.from(tags)
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, "zh-CN"))
 }
 
 function ResumeProgressDialog({
@@ -1089,7 +2062,11 @@ function ResumeProgressDialog({
               id="resume-progress-title"
               className="font-heading text-lg leading-tight font-semibold"
             >
-              {mode === "content" ? "补齐全部正文" : `${modeLabel}文章索引`}
+              {mode === "content"
+                ? "补齐全部正文"
+                : mode === "classify"
+                  ? "补齐旧数据分类"
+                  : `${modeLabel}文章索引`}
             </div>
             <div className="mt-1 truncate text-xs text-muted-foreground">
               {account.nickname} ·{" "}
@@ -1097,7 +2074,9 @@ function ResumeProgressDialog({
                 ? formatAuditDateScope(auditDate)
                 : mode === "content"
                   ? `补齐 ${limit.toLocaleString()} 篇正文`
-                  : `目标 ${limit.toLocaleString()} 篇`}
+                  : mode === "classify"
+                    ? `回填 ${limit.toLocaleString()} 篇旧文章`
+                    : `目标 ${limit.toLocaleString()} 篇`}
             </div>
           </div>
           <Button
@@ -1375,33 +2354,6 @@ function ProgressStateIcon({
   )
 }
 
-function initialResumeProgress(
-  account: Pick<Account, "fakeid" | "nickname">,
-  limit: number,
-  mode: CollectionTask = "forward",
-  auditDate: string | null = null
-): FetchAccountProgress {
-  const label = RESUME_MODE_LABELS[mode]
-  const message =
-    mode === "audit"
-      ? auditDate
-        ? `准备${label}，检测 ${auditDate} 当天`
-        : `准备${label}，目标重扫 ${limit.toLocaleString()} 篇索引`
-      : mode === "content"
-        ? `准备补齐 ${limit.toLocaleString()} 篇正文`
-        : `准备${label}，本次 ${limit.toLocaleString()} 篇文章索引`
-  return {
-    fakeid: account.fakeid,
-    nickname: account.nickname,
-    stage: "prepare",
-    status: "running",
-    message,
-    current: 0,
-    total: limit,
-    title: null,
-  }
-}
-
 function appendProgressEvent(
   events: FetchAccountProgress[],
   next: FetchAccountProgress
@@ -1474,10 +2426,6 @@ function formatAuditDateScope(date: string | null) {
   return date ? `检测 ${date} 当天` : "检测当前区间"
 }
 
-function formatAuditDatePhrase(date: string | null) {
-  return date ? ` ${date} 当天` : ""
-}
-
 function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }
@@ -1496,6 +2444,14 @@ function resumeSteps(mode: CollectionTask) {
     return [
       { label: "确认目标", stages: ["prepare"] },
       { label: "抓取正文", stages: ["content"] },
+      { label: "完成入库", stages: ["complete"] },
+    ]
+  }
+  if (mode === "classify") {
+    return [
+      { label: "确认目标", stages: ["prepare"] },
+      { label: "同步账号", stages: ["account"] },
+      { label: "回填分类", stages: ["articles"] },
       { label: "完成入库", stages: ["complete"] },
     ]
   }
@@ -1750,21 +2706,40 @@ function ArticleContextMenu({
   menu,
   accountName,
   fetchingAid,
+  metricsUpdatingAid,
   busy,
+  tags,
+  tagsLoading,
+  tagError,
+  tagActionKey,
   onClose,
   onSelect,
   onFetchContent,
+  onUpdateMetrics,
+  onToggleTag,
+  onCreateTag,
+  onManageTags,
 }: {
   menu: ArticleMenuState
   accountName: string | null
   fetchingAid: string | null
+  metricsUpdatingAid: string | null
   busy: boolean
+  tags: ArticleTag[]
+  tagsLoading: boolean
+  tagError: string | null
+  tagActionKey: string | null
   onClose: () => void
   onSelect: () => void
   onFetchContent: (article: ArticleSummary) => Promise<void>
+  onUpdateMetrics: (article: ArticleSummary) => Promise<void>
+  onToggleTag: (tag: ArticleTag, assigned: boolean) => Promise<boolean>
+  onCreateTag: () => void
+  onManageTags: () => void
 }) {
   const article = menu.article
   const fetching = fetchingAid === article.aid
+  const updatingMetrics = metricsUpdatingAid === article.aid
 
   const run = (action: () => unknown | Promise<unknown>) => {
     onClose()
@@ -1774,7 +2749,7 @@ function ArticleContextMenu({
   return createPortal(
     <div
       role="menu"
-      className="article-context-menu"
+      className="article-context-menu article-tag-context-menu"
       style={{ left: menu.x, top: menu.y }}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
@@ -1814,6 +2789,86 @@ function ArticleContextMenu({
             ? "重新抓取正文"
             : "抓取正文"}
       </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={Boolean(metricsUpdatingAid)}
+        onClick={() => run(() => onUpdateMetrics(article))}
+      >
+        {updatingMetrics ? (
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+        ) : (
+          <BarChart3Icon className="size-3.5" />
+        )}
+        {updatingMetrics ? "正在更新互动数据" : "更新阅读量相关数据"}
+      </button>
+      <div className="article-context-separator" />
+      <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+        <TagIcon className="size-3" />
+        标签
+      </div>
+      <div
+        role="group"
+        aria-label="切换文章标签"
+        className="max-h-36 overflow-y-auto pr-0.5"
+      >
+        {tagsLoading ? (
+          <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
+            <LoaderCircleIcon className="size-3.5 animate-spin" />
+            正在读取标签
+          </div>
+        ) : tagError ? (
+          <div className="flex items-start gap-2 px-2 py-1.5 text-xs leading-relaxed text-destructive">
+            <AlertCircleIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span className="line-clamp-2">{tagError}</span>
+          </div>
+        ) : tags.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            暂无标签，可从这里新建
+          </div>
+        ) : (
+          tags.map((tag) => (
+            <button
+              key={tag.id}
+              role="menuitemcheckbox"
+              aria-checked={tag.assigned}
+              className="article-context-item"
+              disabled={Boolean(tagActionKey)}
+              onClick={() => void onToggleTag(tag, !tag.assigned)}
+            >
+              {tagActionKey === `toggle:${tag.id}` ? (
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+              ) : tag.assigned ? (
+                <CheckIcon className="size-3.5" />
+              ) : (
+                <CircleIcon className="size-3.5" />
+              )}
+              <span className="min-w-0 flex-1 truncate">{tag.name}</span>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {tag.article_count}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={Boolean(tagActionKey)}
+        onClick={() => run(onCreateTag)}
+      >
+        <PlusIcon className="size-3.5" />
+        新建标签…
+      </button>
+      <button
+        role="menuitem"
+        className="article-context-item"
+        disabled={Boolean(tagActionKey)}
+        onClick={() => run(onManageTags)}
+      >
+        <PencilIcon className="size-3.5" />
+        管理全部标签…
+      </button>
       <div className="article-context-separator" />
       <button
         role="menuitem"
@@ -1850,6 +2905,294 @@ function ArticleContextMenu({
       </button>
     </div>,
     document.body
+  )
+}
+
+function ArticleTagDialog({
+  article,
+  focusCreate,
+  tags,
+  loading,
+  error,
+  actionKey,
+  onClose,
+  onCreate,
+  onToggle,
+  onRename,
+  onDelete,
+}: {
+  article: ArticleSummary
+  focusCreate: boolean
+  tags: ArticleTag[]
+  loading: boolean
+  error: string | null
+  actionKey: string | null
+  onClose: () => void
+  onCreate: (name: string) => Promise<boolean>
+  onToggle: (tag: ArticleTag, assigned: boolean) => Promise<boolean>
+  onRename: (tag: ArticleTag, name: string) => Promise<boolean>
+  onDelete: (tag: ArticleTag) => Promise<boolean>
+}) {
+  const [newTagName, setNewTagName] = useState("")
+  const [editingTagId, setEditingTagId] = useState<number | null>(null)
+  const [editingName, setEditingName] = useState("")
+  const [pendingDelete, setPendingDelete] = useState<ArticleTag | null>(null)
+  const busy = actionKey !== null
+
+  const submitNewTag = async (event: FormEvent) => {
+    event.preventDefault()
+    const name = newTagName.trim()
+    if (!name || busy) return
+    if (await onCreate(name)) setNewTagName("")
+  }
+
+  const submitRename = async (event: FormEvent, tag: ArticleTag) => {
+    event.preventDefault()
+    const name = editingName.trim()
+    if (!name || busy) return
+    if (await onRename(tag, name)) {
+      setEditingTagId(null)
+      setEditingName("")
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>管理文章标签</DialogTitle>
+          <DialogDescription className="line-clamp-2">
+            为《{article.title}》切换标签，也可以统一新建、重命名或删除标签。
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={submitNewTag} className="space-y-2">
+          <Label htmlFor="new-article-tag">新建并添加到当前文章</Label>
+          <div className="flex gap-2">
+            <Input
+              id="new-article-tag"
+              autoFocus={focusCreate}
+              maxLength={24}
+              value={newTagName}
+              disabled={busy}
+              placeholder="例如：产品洞察"
+              onChange={(event) => setNewTagName(event.target.value)}
+            />
+            <Button
+              type="submit"
+              disabled={!newTagName.trim() || busy}
+              className="shrink-0"
+            >
+              {actionKey === "create" ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : (
+                <PlusIcon className="size-4" />
+              )}
+              新建
+            </Button>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            最多 24 个字符；名称不区分英文大小写。
+          </div>
+        </form>
+
+        {error ? (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs leading-relaxed text-destructive select-text"
+          >
+            <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
+            <div className="font-serif text-sm font-semibold text-foreground">
+              全部标签
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {tags.length} 个
+            </div>
+          </div>
+          <div className="max-h-[min(48vh,360px)] overflow-y-auto p-1.5">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 px-3 py-8 text-sm text-muted-foreground">
+                <LoaderCircleIcon className="size-4 animate-spin" />
+                正在读取标签
+              </div>
+            ) : tags.length === 0 ? (
+              <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                还没有标签，在上方创建第一个标签。
+              </div>
+            ) : (
+              tags.map((tag) => {
+                const editing = editingTagId === tag.id
+                const toggling = actionKey === `toggle:${tag.id}`
+                return (
+                  <div
+                    key={tag.id}
+                    className="flex min-h-10 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-muted/60"
+                  >
+                    <Checkbox
+                      id={`article-tag-${tag.id}`}
+                      checked={tag.assigned}
+                      disabled={busy}
+                      aria-label={`${tag.assigned ? "移除" : "添加"}标签 ${tag.name}`}
+                      onCheckedChange={(checked) =>
+                        void onToggle(tag, checked === true)
+                      }
+                    />
+                    {toggling ? (
+                      <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-primary" />
+                    ) : null}
+                    {editing ? (
+                      <form
+                        onSubmit={(event) => void submitRename(event, tag)}
+                        className="flex min-w-0 flex-1 items-center gap-1.5"
+                      >
+                        <Input
+                          autoFocus
+                          maxLength={24}
+                          value={editingName}
+                          disabled={busy}
+                          aria-label={`编辑标签 ${tag.name}`}
+                          className="h-7"
+                          onChange={(event) =>
+                            setEditingName(event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault()
+                              setEditingTagId(null)
+                            }
+                          }}
+                        />
+                        <Button
+                          type="submit"
+                          size="icon-xs"
+                          variant="ghost"
+                          disabled={!editingName.trim() || busy}
+                          aria-label="保存标签名称"
+                        >
+                          {actionKey === `rename:${tag.id}` ? (
+                            <LoaderCircleIcon className="animate-spin" />
+                          ) : (
+                            <CheckIcon />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          disabled={busy}
+                          aria-label="取消编辑"
+                          onClick={() => setEditingTagId(null)}
+                        >
+                          <XIcon />
+                        </Button>
+                      </form>
+                    ) : (
+                      <label
+                        htmlFor={`article-tag-${tag.id}`}
+                        className="min-w-0 flex-1 cursor-pointer truncate text-sm text-foreground"
+                      >
+                        {tag.name}
+                      </label>
+                    )}
+                    {!editing ? (
+                      <>
+                        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                          {tag.article_count} 篇
+                        </span>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          disabled={busy}
+                          aria-label={`编辑标签 ${tag.name}`}
+                          onClick={() => {
+                            setEditingTagId(tag.id)
+                            setEditingName(tag.name)
+                            setPendingDelete(null)
+                          }}
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          disabled={busy}
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={`删除标签 ${tag.name}`}
+                          onClick={() => {
+                            setPendingDelete(tag)
+                            setEditingTagId(null)
+                          }}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+
+        {pendingDelete ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+            <div className="text-sm font-medium text-foreground">
+              删除“{pendingDelete.name}”？
+            </div>
+            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              该标签会从 {pendingDelete.article_count}{" "}
+              篇文章中移除，文章本身不会被删除。
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setPendingDelete(null)}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() =>
+                  void onDelete(pendingDelete).then((deleted) => {
+                    if (deleted) setPendingDelete(null)
+                  })
+                }
+              >
+                {actionKey === `delete:${pendingDelete.id}` ? (
+                  <LoaderCircleIcon className="animate-spin" />
+                ) : (
+                  <Trash2Icon />
+                )}
+                确认删除
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <DialogFooter className="items-center justify-between">
+          <div className="mr-auto text-xs text-muted-foreground">
+            勾选后立即保存到本机数据库。
+          </div>
+          <Button type="button" variant="outline" onClick={onClose}>
+            完成
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1927,8 +3270,8 @@ function createArticleMenuState(
   clientX: number,
   clientY: number
 ): ArticleMenuState {
-  const width = 226
-  const height = 284
+  const width = 250
+  const height = 540
   const padding = 8
   const x = Math.min(clientX, window.innerWidth - width - padding)
   const y = Math.min(clientY, window.innerHeight - height - padding)
@@ -1946,6 +3289,30 @@ function formatDate(unix: number): string {
   const m = String(d.getMonth() + 1).padStart(2, "0")
   const day = String(d.getDate()).padStart(2, "0")
   return `${y}-${m}-${day}`
+}
+
+function formatMetricsUpdateToast(snapshot: ArticlePublicMetricsSnapshot) {
+  const backend = snapshot.source_kind === "wechat_mp_backend"
+  const metrics = [
+    [backend ? "阅读人数" : "阅读", snapshot.read_count],
+    ["点赞", snapshot.like_count],
+    ["推荐", snapshot.recommend_count],
+  ] as const
+  const visible = metrics.flatMap(([label, value]) =>
+    value === null
+      ? []
+      : [`${label} ${new Intl.NumberFormat("zh-CN").format(value)}`]
+  )
+  const source = backend
+    ? "公众号后台"
+    : snapshot.source_kind === "wechat_account_feed"
+      ? "公众号文章列表"
+      : snapshot.source_kind === "wechat_local_session"
+        ? "本机微信接口"
+        : "本机微信"
+  return visible.length > 0
+    ? `已从${source}更新：${visible.join(" · ")}`
+    : `已从${source}更新互动数据`
 }
 
 function errorMessage(error: unknown): string {

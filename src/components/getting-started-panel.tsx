@@ -13,6 +13,13 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import type { LicenseStatus } from "@/lib/api"
 
 interface GettingStartedPanelProps {
@@ -30,6 +37,15 @@ interface GettingStartedPanelProps {
   onConnectWechat: () => void
   onAddAccount: () => void
   onClose?: () => void
+  presentation?: "page" | "dialog"
+}
+
+type GettingStartedDialogProps = Omit<
+  GettingStartedPanelProps,
+  "canClose" | "onClose" | "presentation"
+> & {
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
 type StepState = "complete" | "current" | "upcoming"
@@ -49,6 +65,7 @@ export function GettingStartedPanel({
   onConnectWechat,
   onAddAccount,
   onClose,
+  presentation = "page",
 }: GettingStartedPanelProps) {
   const hasSavedAccount = savedAccountCount > 0
   const completedSteps = [lovstudioReady, sourceReady, hasSavedAccount].filter(
@@ -161,14 +178,24 @@ export function GettingStartedPanel({
   ]
 
   return (
-    <main className="getting-started flex min-w-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-5xl flex-col justify-center px-5 py-8 sm:px-8 lg:px-12 lg:py-12">
+    <section className="getting-started flex min-h-0 min-w-0 flex-1 overflow-y-auto">
+      <div
+        className={
+          presentation === "dialog"
+            ? "flex w-full flex-col justify-center px-6 py-6 sm:px-8 sm:py-8"
+            : "mx-auto flex w-full max-w-5xl flex-col justify-center px-5 py-8 sm:px-8 lg:px-12 lg:py-12"
+        }
+      >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-xs font-semibold tracking-[0.16em] text-primary">
               开始使用
             </p>
-            <h1 className="mt-3 font-serif text-3xl leading-tight font-semibold text-foreground sm:text-4xl">
+            <h1
+              className={`mt-3 font-serif text-3xl leading-tight font-semibold text-foreground ${
+                presentation === "page" ? "sm:text-4xl" : ""
+              }`}
+            >
               三步，准备好你的阅读工作台
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
@@ -184,7 +211,7 @@ export function GettingStartedPanel({
             >
               {completedSteps}/3 已完成
             </Badge>
-            {canClose && onClose ? (
+            {presentation === "page" && canClose && onClose ? (
               <Button
                 type="button"
                 size="icon-sm"
@@ -219,7 +246,32 @@ export function GettingStartedPanel({
           ) : null}
         </div>
       </div>
-    </main>
+    </section>
+  )
+}
+
+export function GettingStartedDialog({
+  open,
+  onOpenChange,
+  ...panelProps
+}: GettingStartedDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[min(760px,calc(100dvh-32px))] w-[min(960px,calc(100vw-32px))] max-w-none overflow-hidden p-0 sm:max-w-none">
+        <DialogHeader className="sr-only">
+          <DialogTitle>账号准备</DialogTitle>
+          <DialogDescription>
+            检查 Lovstudio、公众号来源和文章库的准备状态。
+          </DialogDescription>
+        </DialogHeader>
+        <GettingStartedPanel
+          {...panelProps}
+          presentation="dialog"
+          canClose
+          onClose={() => onOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
+import { captureArticleMetricsWithJob } from "@/lib/acquisition"
+
+const ACQUISITION_CORE_V1_ENABLED =
+  import.meta.env.VITE_ACQUISITION_CORE_V1 !== "0"
 
 export interface Account {
   fakeid: string
@@ -22,13 +26,73 @@ export interface ArticleSummary {
   author: string | null
   create_time: number
   has_content: boolean
+  article_type?: number | null
+  copyright_type?: number | null
+  tags?: string[]
+  local_file_path?: string | null
   match_fields?: ArticleMatchField[]
   match_excerpt?: string | null
+}
+
+export interface ArticleTag {
+  id: number
+  name: string
+  article_count: number
+  assigned: boolean
 }
 
 export interface ArticleDetail extends ArticleSummary {
   content_html: string | null
   content_md: string | null
+}
+
+export type ArticlePublicMetricsStatus = "visible" | "unavailable" | "blocked"
+
+export interface ArticlePublicMetricsSnapshot {
+  id: number
+  aid: string
+  source_url: string
+  source_kind:
+    | "wechat_public_page"
+    | "wechat_local_cache"
+    | "wechat_local_session"
+    | "wechat_mp_backend"
+    | "wechat_account_feed"
+  capture_method: string
+  captured_at: number
+  status: ArticlePublicMetricsStatus
+  read_count: number | null
+  like_count: number | null
+  recommend_count: number | null
+  share_count: number | null
+  comment_count: number | null
+  collect_count: number | null
+  note: string | null
+}
+
+const ARTICLE_PUBLIC_METRICS_UPDATED_EVENT =
+  "wxmp:article-public-metrics-updated"
+
+export function notifyArticlePublicMetricsUpdated(
+  snapshot: ArticlePublicMetricsSnapshot
+) {
+  window.dispatchEvent(
+    new CustomEvent<ArticlePublicMetricsSnapshot>(
+      ARTICLE_PUBLIC_METRICS_UPDATED_EVENT,
+      { detail: snapshot }
+    )
+  )
+}
+
+export function onArticlePublicMetricsUpdated(
+  callback: (snapshot: ArticlePublicMetricsSnapshot) => void
+) {
+  const listener = (event: Event) => {
+    callback((event as CustomEvent<ArticlePublicMetricsSnapshot>).detail)
+  }
+  window.addEventListener(ARTICLE_PUBLIC_METRICS_UPDATED_EVENT, listener)
+  return () =>
+    window.removeEventListener(ARTICLE_PUBLIC_METRICS_UPDATED_EVENT, listener)
 }
 
 export interface ArticleLocalFile {
@@ -65,7 +129,7 @@ export interface FetchAccountResult {
   stderr: string
 }
 
-export type FetchMode = "forward" | "backward" | "audit"
+export type FetchMode = "forward" | "backward" | "audit" | "classify"
 
 export interface AccountSearchResult {
   fakeid: string
@@ -114,10 +178,39 @@ export const api = {
   listAccounts: () => invoke<Account[]>("list_accounts"),
   listArticles: (fakeid: string) =>
     invoke<ArticleSummary[]>("list_articles", { fakeid }),
+  listArticleTagNames: (fakeid: string) =>
+    invoke<Record<string, string[]>>("list_article_tag_names", { fakeid }),
+  listArticleManagementRows: (fakeid: string) =>
+    invoke<ArticleSummary[]>("list_article_management_rows", { fakeid }),
   searchArticles: (fakeid: string, query: string) =>
     invoke<ArticleSummary[]>("search_articles", { fakeid, query }),
   getArticle: (aid: string) =>
     invoke<ArticleDetail | null>("get_article", { aid }),
+  getArticlePublicMetrics: (aid: string) =>
+    invoke<ArticlePublicMetricsSnapshot | null>("get_article_public_metrics", {
+      aid,
+    }),
+  captureArticlePublicMetrics: (aid: string) =>
+    ACQUISITION_CORE_V1_ENABLED
+      ? captureArticleMetricsWithJob(aid)
+      : invoke<ArticlePublicMetricsSnapshot>("capture_article_public_metrics", {
+          aid,
+        }),
+  listArticleTags: (aid: string) =>
+    invoke<ArticleTag[]>("list_article_tags", { aid }),
+  listAllArticleTags: () => invoke<ArticleTag[]>("list_all_article_tags"),
+  listTagArticles: (tagId: number) =>
+    invoke<ArticleSummary[]>("list_tag_articles", { tagId }),
+  createArticleTag: (name: string) =>
+    invoke<ArticleTag>("create_article_tag", { name }),
+  createAndAssignArticleTag: (aid: string, name: string) =>
+    invoke<ArticleTag>("create_and_assign_article_tag", { aid, name }),
+  updateArticleTag: (tagId: number, name: string) =>
+    invoke<ArticleTag>("update_article_tag", { tagId, name }),
+  deleteArticleTag: (tagId: number) =>
+    invoke<void>("delete_article_tag", { tagId }),
+  setArticleTag: (aid: string, tagId: number, assigned: boolean) =>
+    invoke<void>("set_article_tag", { aid, tagId, assigned }),
   cacheDbPath: () => invoke<string>("cache_db_path"),
   articleLocalFile: (aid: string) =>
     invoke<ArticleLocalFile | null>("article_local_file", { aid }),
@@ -127,6 +220,8 @@ export const api = {
     invoke<string>("reveal_article_local_file", { aid }),
   exportArticleLocal: (aid: string) =>
     invoke<string>("export_article_local", { aid }),
+  exportArticlesTable: (fileName: string, csv: string) =>
+    invoke<string>("export_articles_table", { fileName, csv }),
   resolveWechatImage: (url: string) =>
     invoke<ResolvedWechatImage>("resolve_wechat_image", { url }),
   searchAccounts: (query: string) =>
@@ -176,6 +271,22 @@ export const api = {
     invoke<GhSyncSummary>("github_sync_articles", { options }),
   archiveArticlesLocal: (options: GhSyncOptions = {}) =>
     invoke<LocalArchiveSummary>("archive_articles_local", { options }),
+
+  // Feishu knowledge-base integration -------------------------------------
+  feishuSettingsGet: () => invoke<FeishuSettings>("feishu_settings_get"),
+  feishuConfigureCredentials: (appId: string, appSecret: string) =>
+    invoke<FeishuSettings>("feishu_configure_credentials", {
+      appId,
+      appSecret,
+    }),
+  feishuSettingsSet: (settings: FeishuSettingsInput) =>
+    invoke<FeishuSettings>("feishu_settings_set", { settings }),
+  feishuDisconnect: () => invoke<FeishuSettings>("feishu_disconnect"),
+  feishuListSpaces: () => invoke<FeishuSpaceBrief[]>("feishu_list_spaces"),
+  feishuResolveWikiTarget: (input: string) =>
+    invoke<FeishuWikiNodeBrief>("feishu_resolve_wiki_target", { input }),
+  feishuSyncArticles: (options: FeishuSyncOptions = {}) =>
+    invoke<FeishuSyncSummary>("feishu_sync_articles", { options }),
 }
 
 export const onLoginSuccess = (cb: () => void) => listen("login://success", cb)
@@ -187,6 +298,9 @@ export const onFetchAccountProgress = (
   listen<FetchAccountProgress>("fetch-account://progress", (e) => cb(e.payload))
 export const onGithubSyncProgress = (cb: (progress: GhSyncProgress) => void) =>
   listen<GhSyncProgress>("github-sync://progress", (e) => cb(e.payload))
+export const onFeishuSyncProgress = (
+  cb: (progress: FeishuSyncProgress) => void
+) => listen<FeishuSyncProgress>("feishu-sync://progress", (e) => cb(e.payload))
 
 // ---- GitHub types --------------------------------------------------------
 
@@ -254,3 +368,73 @@ export type GhSyncProgress =
   | { stage: "commit"; changed: number }
   | { stage: "push"; message: string }
   | { stage: "done"; pushed: number; skipped: number; message: string }
+
+// ---- Feishu types --------------------------------------------------------
+
+export interface FeishuSettings {
+  app_id: string | null
+  has_app_secret: boolean
+  enabled: boolean
+  auto_sync: boolean
+  space_id: string | null
+  space_name: string | null
+  parent_node_token: string | null
+  parent_node_title: string | null
+  account_fakeids: string[]
+  last_synced_at: number | null
+  last_error: string | null
+  synced_article_count: number
+}
+
+export interface FeishuSettingsInput {
+  enabled: boolean
+  auto_sync: boolean
+  space_id: string | null
+  space_name: string | null
+  parent_node_token: string | null
+  parent_node_title: string | null
+  account_fakeids: string[]
+}
+
+export interface FeishuSpaceBrief {
+  space_id: string
+  name: string
+  description: string | null
+  space_type: string | null
+  visibility: string | null
+}
+
+export interface FeishuWikiNodeBrief {
+  space_id: string
+  node_token: string
+  obj_token: string
+  obj_type: string
+  parent_node_token: string | null
+  title: string | null
+  has_child: boolean
+}
+
+export interface FeishuSyncOptions {
+  account_fakeid?: string | null
+  force?: boolean
+}
+
+export interface FeishuSyncSummary {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  total: number
+  last_error: string | null
+}
+
+export type FeishuSyncProgress =
+  | { stage: "start"; total: number }
+  | { stage: "article"; current: number; total: number; title: string }
+  | {
+      stage: "done"
+      created: number
+      updated: number
+      skipped: number
+      failed: number
+    }

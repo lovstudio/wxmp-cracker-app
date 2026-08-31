@@ -8,9 +8,13 @@ import {
 } from "react"
 import { AccountSidebar } from "@/components/account-sidebar"
 import { AccountWorkspace } from "@/components/account-workspace"
-import { GettingStartedPanel } from "@/components/getting-started-panel"
+import {
+  GettingStartedDialog,
+  GettingStartedPanel,
+} from "@/components/getting-started-panel"
 import { GithubSyncSettings } from "@/components/github-sync-settings"
 import { ArticleList } from "@/components/article-list"
+import { ArticleTagManager } from "@/components/article-tag-manager"
 import { ArticleDetail as ArticleDetailView } from "@/components/article-detail"
 import { TopBar, type WorkspaceTabId } from "@/components/top-bar"
 import { AddAccountDialog } from "@/components/add-account-dialog"
@@ -30,6 +34,7 @@ import {
   onLoginSuccess,
   type Account,
   type AccountSearchResult,
+  type AuthStatus,
   type FetchAccountProgress,
   type LicenseStatus,
   type LoginAccount,
@@ -49,6 +54,7 @@ const WORKSPACE_ROUTE_QUERY_PARAM = "q"
 const WORKSPACE_TAB_IDS = [
   "reader",
   "collection",
+  "tags",
   "profile",
   "trends",
   "style",
@@ -74,6 +80,7 @@ type PendingFetch = {
 
 type RefreshAuthOptions = {
   notifyExpired?: boolean
+  refreshAfterCurrent?: boolean
   toastOnError?: boolean
   toastOnSuccess?: boolean
 }
@@ -130,7 +137,7 @@ function WorkspaceApp() {
   const [articleRefreshKey, setArticleRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialRoute.tab)
   const authExpiredNotifiedRef = useRef(false)
-  const authRefreshInFlightRef = useRef(false)
+  const authRefreshInFlightRef = useRef<Promise<AuthStatus | null> | null>(null)
   const orderedAccounts = useMemo(
     () => orderAccounts(accounts, accountOrder),
     [accounts, accountOrder]
@@ -199,7 +206,8 @@ function WorkspaceApp() {
   const showGettingStarted =
     activeTab === "reader" &&
     accountsLoaded &&
-    (setupPanelOpen || savedAccountCount === 0)
+    savedAccountCount === 0 &&
+    !setupPanelOpen
 
   const refreshAccounts = useCallback(async () => {
     try {
@@ -215,64 +223,77 @@ function WorkspaceApp() {
   }, [])
 
   const refreshAuth = useCallback(
-    async (options: RefreshAuthOptions = {}) => {
-      if (authRefreshInFlightRef.current) {
-        return null
-      }
+    (options: RefreshAuthOptions = {}): Promise<AuthStatus | null> => {
+      const startRefresh = () => {
+        const request = (async () => {
+          setAuthChecking(true)
 
-      authRefreshInFlightRef.current = true
-      setAuthChecking(true)
+          try {
+            const s = await api.authStatus()
+            const checkedAt = s.checked_at ?? currentUnixTimestamp()
+            const expired = Boolean(s.expired)
+            const sessionActive = s.logged_in && !expired
 
-      try {
-        const s = await api.authStatus()
-        const checkedAt = s.checked_at ?? currentUnixTimestamp()
-        const expired = Boolean(s.expired)
-        const sessionActive = s.logged_in && !expired
+            setLoggedIn(sessionActive)
+            setAuthAccount(sessionActive ? s.account : null)
+            setLastLoginAt(s.last_login_at)
+            setAuthExpired(expired)
+            setLastAuthCheckAt(checkedAt)
 
-        setLoggedIn(sessionActive)
-        setAuthAccount(sessionActive ? s.account : null)
-        setLastLoginAt(s.last_login_at)
-        setAuthExpired(expired)
-        setLastAuthCheckAt(checkedAt)
-
-        if (sessionActive && s.account?.avatar) {
-          await refreshAccounts()
-        }
-
-        if (expired) {
-          const message = s.message ?? "微信公众号登录已过期，请重新扫码登录"
-          if (options.notifyExpired || !authExpiredNotifiedRef.current) {
-            toast.wxmpError(message, api.openLogin, { duration: 20000 })
-            authExpiredNotifiedRef.current = true
-          }
-        } else {
-          authExpiredNotifiedRef.current = false
-          if (options.toastOnSuccess && sessionActive) {
-            if (s.message) {
-              toast.warning(s.message)
-            } else {
-              toast.success("微信公众号 Session 有效")
+            if (sessionActive && s.account?.avatar) {
+              await refreshAccounts()
             }
+
+            if (expired) {
+              const message =
+                s.message ?? "微信公众号登录已过期，请重新扫码登录"
+              if (options.notifyExpired && !authExpiredNotifiedRef.current) {
+                toast.wxmpError(message, api.openLogin, { duration: 20000 })
+                authExpiredNotifiedRef.current = true
+              }
+            } else {
+              authExpiredNotifiedRef.current = false
+              if (options.toastOnSuccess && sessionActive) {
+                if (s.message) {
+                  toast.warning(s.message)
+                } else {
+                  toast.success("微信公众号 Session 有效")
+                }
+              }
+            }
+
+            return s
+          } catch (error) {
+            setLoggedIn(false)
+            setAuthAccount(null)
+            setLastLoginAt(null)
+            setAuthExpired(false)
+            setLastAuthCheckAt(currentUnixTimestamp())
+
+            if (options.toastOnError && isTauri()) {
+              toast.error(`校验公众号登录状态失败: ${errorMessage(error)}`)
+            }
+
+            return null
+          } finally {
+            setAuthChecking(false)
           }
-        }
+        })()
 
-        return s
-      } catch (error) {
-        setLoggedIn(false)
-        setAuthAccount(null)
-        setLastLoginAt(null)
-        setAuthExpired(false)
-        setLastAuthCheckAt(currentUnixTimestamp())
-
-        if (options.toastOnError && isTauri()) {
-          toast.error(`校验公众号登录状态失败: ${errorMessage(error)}`)
-        }
-
-        return null
-      } finally {
-        authRefreshInFlightRef.current = false
-        setAuthChecking(false)
+        authRefreshInFlightRef.current = request
+        void request.finally(() => {
+          if (authRefreshInFlightRef.current === request) {
+            authRefreshInFlightRef.current = null
+          }
+        })
+        return request
       }
+
+      const current = authRefreshInFlightRef.current
+      if (!current) return startRefresh()
+      if (!options.refreshAfterCurrent) return current
+
+      return current.then(startRefresh, startRefresh)
     },
     [refreshAccounts]
   )
@@ -288,13 +309,16 @@ function WorkspaceApp() {
     [refreshAuth]
   )
 
-  const refreshAuthSilently = useCallback(async () => {
-    try {
-      await refreshAuth()
-    } catch {
-      // `refreshAuth` already normalizes state on failure.
-    }
-  }, [refreshAuth])
+  const refreshAuthSilently = useCallback(
+    async (refreshAfterCurrent = false) => {
+      try {
+        await refreshAuth({ refreshAfterCurrent })
+      } catch {
+        // `refreshAuth` already normalizes state on failure.
+      }
+    },
+    [refreshAuth]
+  )
 
   const refreshLicenseStatus = useCallback(async () => {
     if (!isTauri()) {
@@ -328,6 +352,18 @@ function WorkspaceApp() {
       .catch((e) => toast.wxmpError(errorMessage(e), api.openLogin))
   }, [])
 
+  const openSetupDialog = useCallback(() => {
+    setSetupPanelOpen(true)
+  }, [])
+
+  const reopenWechatLoginAfterInvalidSession = useCallback(() => {
+    setLoggedIn(false)
+    setAuthAccount(null)
+    setAuthExpired(true)
+    setLastAuthCheckAt(currentUnixTimestamp())
+    openWechatLogin()
+  }, [openWechatLogin])
+
   const logoutWechatAccount = useCallback(async () => {
     try {
       await api.authLogout()
@@ -354,8 +390,8 @@ function WorkspaceApp() {
     const ok = onLoginSuccess(() => {
       toast.success("登录成功，已保存凭证")
       setFetchProgressEvents([])
-      refreshAuthSilently()
-      refreshLicenseStatus()
+      void refreshAuthSilently(true)
+      void refreshLicenseStatus()
     })
     const err = onLoginError((m) => {
       toast.error(`登录失败: ${m}`)
@@ -379,7 +415,7 @@ function WorkspaceApp() {
     }
 
     const authStatusInterval = window.setInterval(() => {
-      void refreshAuth({ notifyExpired: true })
+      void refreshAuth()
     }, AUTH_STATUS_CHECK_INTERVAL_MS)
 
     return () => {
@@ -509,6 +545,7 @@ function WorkspaceApp() {
       // incremental sync for the freshly-fetched account. Fire-and-forget —
       // errors surface via the GitHub-sync progress channel + toast.
       void maybeAutoPush(account.fakeid)
+      void maybeAutoSyncFeishu(account.fakeid)
     } catch (e) {
       const message = errorMessage(e)
       setFetchProgressEvents((currentEvents) =>
@@ -541,6 +578,7 @@ function WorkspaceApp() {
     setAddAccountInitialQuery("")
     toast.success(`已录入文章：${article.title}`)
     void maybeAutoPush(article.fakeid)
+    void maybeAutoSyncFeishu(article.fakeid)
   }
 
   const continuePendingFetch = (status: LicenseStatus) => {
@@ -646,6 +684,37 @@ function WorkspaceApp() {
     toast.success(`已恢复 ${account?.nickname ?? "公众号"}`)
   }
 
+  const setupGuideProps = {
+    lovstudioLoading: lovstudioAuthLoading,
+    lovstudioReady: Boolean(user),
+    lovstudioLabel: lovstudioEmail ?? lovstudioDisplayName,
+    licenseStatus,
+    sourceReady,
+    sourceLabel: loggedIn
+      ? (authAccount?.nickname ?? "公众号账号已连接")
+      : savedAccountCount > 0
+        ? `已保存 ${savedAccountCount} 个公众号`
+        : null,
+    savedAccountCount,
+    articleCount,
+    onLovstudioLogin: () => {
+      setSetupPanelOpen(false)
+      setLovstudioAuthOpen(true)
+    },
+    onOpenLicense: () => {
+      setSetupPanelOpen(false)
+      setLicenseOpen(true)
+    },
+    onConnectWechat: () => {
+      setSetupPanelOpen(false)
+      openWechatLogin()
+    },
+    onAddAccount: () => {
+      setSetupPanelOpen(false)
+      openAddAccount()
+    },
+  }
+
   return (
     <>
       <div className="app-shell">
@@ -678,10 +747,7 @@ function WorkspaceApp() {
             onCheckWechatSession={checkWechatSession}
             onLovstudioLogin={() => setLovstudioAuthOpen(true)}
             onLovstudioLogout={() => void signOutLovstudio()}
-            onOpenSetup={() => {
-              setActiveTab("reader")
-              setSetupPanelOpen(true)
-            }}
+            onOpenSetup={openSetupDialog}
             onLogin={openWechatLogin}
             onLogoutWechatAccount={() => void logoutWechatAccount()}
             onSelect={(id) => {
@@ -702,10 +768,7 @@ function WorkspaceApp() {
               setupProgress={setupProgress}
               onOpenLicenseAdmin={() => setLicenseAdminOpen(true)}
               onOpenLovstudioLogin={() => setLovstudioAuthOpen(true)}
-              onOpenSetup={() => {
-                setActiveTab("reader")
-                setSetupPanelOpen(true)
-              }}
+              onOpenSetup={openSetupDialog}
               onTabChange={setActiveTab}
             />
             <div
@@ -719,33 +782,14 @@ function WorkspaceApp() {
               }
             >
               {showGettingStarted ? (
-                <GettingStartedPanel
-                  lovstudioLoading={lovstudioAuthLoading}
-                  lovstudioReady={Boolean(user)}
-                  lovstudioLabel={lovstudioEmail ?? lovstudioDisplayName}
-                  licenseStatus={licenseStatus}
-                  sourceReady={sourceReady}
-                  sourceLabel={
-                    loggedIn
-                      ? (authAccount?.nickname ?? "公众号账号已连接")
-                      : savedAccountCount > 0
-                        ? `已保存 ${savedAccountCount} 个公众号`
-                        : null
-                  }
-                  savedAccountCount={savedAccountCount}
-                  articleCount={articleCount}
-                  canClose={savedAccountCount > 0}
-                  onLovstudioLogin={() => setLovstudioAuthOpen(true)}
-                  onOpenLicense={() => setLicenseOpen(true)}
-                  onConnectWechat={openWechatLogin}
-                  onAddAccount={() => openAddAccount()}
-                  onClose={() => setSetupPanelOpen(false)}
-                />
+                <GettingStartedPanel {...setupGuideProps} />
               ) : activeTab === "reader" ? (
                 <>
                   <ArticleList
                     account={activeAccount}
                     fakeid={selectedFakeid}
+                    wechatLoggedIn={loggedIn}
+                    wechatAuthChecking={authChecking}
                     activeAid={activeAid}
                     query={articleQuery}
                     refreshKey={articleRefreshKey}
@@ -753,11 +797,18 @@ function WorkspaceApp() {
                     onQueryChange={setArticleQuery}
                     onContentFetched={() => {
                       setArticleRefreshKey((key) => key + 1)
+                      if (selectedFakeid) {
+                        scheduleFeishuAutoSync(selectedFakeid)
+                      }
                     }}
                     onCollectionUpdated={() => {
                       refreshAccounts()
                       setArticleRefreshKey((key) => key + 1)
                     }}
+                    onWechatLogin={openWechatLogin}
+                    onWechatSessionInvalid={
+                      reopenWechatLoginAfterInvalidSession
+                    }
                   />
                   <ArticleDetailView
                     aid={activeAid}
@@ -765,9 +816,17 @@ function WorkspaceApp() {
                     onBackToList={() => setActiveAid(null)}
                     onContentFetched={() => {
                       setArticleRefreshKey((key) => key + 1)
+                      if (selectedFakeid) {
+                        scheduleFeishuAutoSync(selectedFakeid)
+                      }
                     }}
                   />
                 </>
+              ) : activeTab === "tags" ? (
+                <ArticleTagManager
+                  accounts={accounts}
+                  refreshKey={articleRefreshKey}
+                />
               ) : activeTab === "github-sync" ? (
                 <div className="flex-1 overflow-y-auto">
                   <GithubSyncSettings />
@@ -779,6 +838,9 @@ function WorkspaceApp() {
                   refreshKey={articleRefreshKey}
                   onContentFetched={() => {
                     setArticleRefreshKey((key) => key + 1)
+                    if (selectedFakeid) {
+                      scheduleFeishuAutoSync(selectedFakeid)
+                    }
                   }}
                   onCollectionUpdated={() => {
                     refreshAccounts()
@@ -790,6 +852,11 @@ function WorkspaceApp() {
           </SidebarInset>
         </SidebarProvider>
       </div>
+      <GettingStartedDialog
+        {...setupGuideProps}
+        open={setupPanelOpen}
+        onOpenChange={setSetupPanelOpen}
+      />
       <AddAccountDialog
         open={addAccountOpen}
         initialQuery={addAccountInitialQuery}
@@ -1175,5 +1242,43 @@ async function maybeAutoPush(fakeid: string) {
     }
   } catch (e) {
     toast.error(`GitHub 自动同步失败: ${String(e)}`)
+  }
+}
+
+const feishuAutoSyncTimers = new Map<string, number>()
+
+function scheduleFeishuAutoSync(fakeid: string) {
+  const activeTimer = feishuAutoSyncTimers.get(fakeid)
+  if (activeTimer !== undefined) window.clearTimeout(activeTimer)
+  const timer = window.setTimeout(() => {
+    feishuAutoSyncTimers.delete(fakeid)
+    void maybeAutoSyncFeishu(fakeid)
+  }, 3_000)
+  feishuAutoSyncTimers.set(fakeid, timer)
+}
+
+async function maybeAutoSyncFeishu(fakeid: string) {
+  try {
+    const settings = await api.feishuSettingsGet()
+    if (
+      !settings.enabled ||
+      !settings.auto_sync ||
+      !settings.space_id ||
+      !settings.account_fakeids.includes(fakeid)
+    ) {
+      return
+    }
+    const summary = await api.feishuSyncArticles({ account_fakeid: fakeid })
+    const changed = summary.created + summary.updated
+    if (changed > 0) {
+      toast.success(`已自动同步 ${changed} 篇到飞书知识库`)
+    }
+    if (summary.failed > 0) {
+      toast.error(
+        `飞书自动同步有 ${summary.failed} 篇失败：${summary.last_error ?? "请检查集成设置"}`
+      )
+    }
+  } catch (error) {
+    toast.error(`飞书自动同步失败：${errorMessage(error)}`)
   }
 }

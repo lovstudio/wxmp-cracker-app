@@ -324,31 +324,30 @@ input {
     ),
     var(--card);
   box-shadow:
-    inset 0 1px 0 color-mix(in oklch, white 66%, transparent),
-    0 8px 24px color-mix(in oklch, var(--foreground) 7%, transparent);
+    inset 0 1px 0 color-mix(in oklch, var(--background) 70%, transparent),
+    0 5px 18px color-mix(in oklch, var(--foreground) 4%, transparent);
 }
 
 .topbar-rule {
   width: 1px;
-  height: 22px;
+  height: 18px;
   flex-shrink: 0;
   background: color-mix(in oklch, var(--border) 82%, transparent);
 }
 
 .workspace-tab-nav {
+  align-self: stretch;
   overflow: hidden;
 }
 
 .workspace-tab-list {
   display: flex;
+  height: 100%;
   width: 100%;
   min-width: 0;
-  gap: 4px;
+  gap: 2px;
   overflow-x: auto;
-  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
-  border-radius: var(--radius-xl);
-  padding: 3px;
-  background: color-mix(in oklch, var(--muted) 34%, transparent);
+  padding: 0 2px;
   scrollbar-width: none;
 }
 
@@ -358,106 +357,147 @@ input {
 
 .workspace-tab {
   display: inline-flex;
-  height: 30px;
+  height: 100%;
   min-width: max-content;
   align-items: center;
-  gap: 6px;
   position: relative;
-  border: 1px solid transparent;
-  border-radius: var(--radius-lg);
-  padding: 0 11px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 10px;
   color: color-mix(in oklch, var(--muted-foreground) 90%, var(--foreground));
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   white-space: nowrap;
   transition:
     background-color 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease,
-    box-shadow 150ms ease;
+    color 150ms ease;
 }
 
 .workspace-tab:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 22%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--ring) 70%, transparent);
   outline: none;
 }
 
 .workspace-tab:hover {
   color: var(--foreground);
-  background: color-mix(in oklch, var(--card) 64%, transparent);
+  background: color-mix(in oklch, var(--muted) 34%, transparent);
 }
 
 .workspace-tab[data-active="true"] {
-  border-color: color-mix(in oklch, var(--primary) 34%, var(--border));
-  background: color-mix(in oklch, var(--card) 88%, transparent);
+  background: transparent;
   color: var(--foreground);
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklch, white 66%, transparent),
-    0 8px 18px color-mix(in oklch, var(--foreground) 8%, transparent);
+  font-weight: 650;
+}
+
+.workspace-tab::after {
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--primary);
+  content: "";
+  opacity: 0;
+  transform: scaleX(0.5);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
 }
 
 .workspace-tab[data-active="true"]::after {
-  position: absolute;
-  right: 12px;
-  bottom: 2px;
-  left: 12px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--primary);
-  content: "";
+  opacity: 1;
+  transform: scaleX(1);
 }
 
-.workspace-tab svg {
-  color: color-mix(in oklch, var(--primary) 74%, var(--muted-foreground));
+.topbar-utility-cluster {
+  border-left: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  padding-left: 8px;
 }
 
-.topbar-resource-group {
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--radius-xl);
-  padding: 3px;
-  background: color-mix(in oklch, var(--muted) 28%, transparent);
+.topbar-setup-button {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.topbar-pill {
-  display: inline-flex;
+.topbar-setup-button:hover {
+  color: var(--foreground);
+}
+
+.topbar-setup-button svg {
+  color: color-mix(in oklch, var(--primary) 82%, var(--foreground));
+}
+
+.topbar-resource-summary {
   height: 28px;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  border: 1px solid transparent;
   border-radius: var(--radius-lg);
-  padding: 0 8px;
-  background: transparent;
+  padding: 0 7px;
   color: color-mix(in oklch, var(--foreground) 76%, var(--muted-foreground));
   font-size: 12px;
   line-height: 1;
   cursor: help;
-  transition:
-    background-color 150ms ease,
-    border-color 150ms ease;
+  outline: none;
+  transition: background-color 150ms ease;
 }
 
-.topbar-pill:hover {
-  border-color: color-mix(in oklch, var(--border) 66%, transparent);
-  background: color-mix(in oklch, var(--card) 68%, transparent);
+.topbar-resource-summary:hover,
+.topbar-resource-summary:focus-visible {
+  background: color-mix(in oklch, var(--muted) 48%, transparent);
 }
 
-.topbar-pill svg {
+.topbar-resource-summary:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--ring) 70%, transparent);
+}
+
+.topbar-resource-summary svg {
   color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
 }
 
+.topbar-resource-label {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.topbar-resource-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--muted-foreground);
+}
+
+.topbar-resource-summary[data-state="ready"] .topbar-resource-dot {
+  background: var(--primary);
+}
+
+.topbar-resource-summary[data-state="warning"] .topbar-resource-dot,
+.topbar-resource-summary[data-state="error"] .topbar-resource-dot {
+  background: var(--destructive);
+}
+
+.topbar-resource-divider {
+  width: 1px;
+  height: 12px;
+  flex-shrink: 0;
+  background: color-mix(in oklch, var(--border) 78%, transparent);
+}
+
 .topbar-action-button {
-  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
-  background: color-mix(in oklch, var(--card) 72%, transparent);
-  color: var(--foreground);
-  box-shadow: inset 0 1px 0 color-mix(in oklch, white 62%, transparent);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  box-shadow: none;
 }
 
 .topbar-action-button:hover {
-  border-color: color-mix(in oklch, var(--primary) 35%, var(--border));
-  background: color-mix(in oklch, var(--accent) 72%, var(--card));
+  border-color: transparent;
+  background: color-mix(in oklch, var(--muted) 52%, transparent);
   color: var(--foreground);
 }
 
@@ -845,6 +885,12 @@ input {
 
 .account-context-menu {
   width: 190px;
+}
+
+.article-tag-context-menu {
+  width: 250px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .article-context-title {

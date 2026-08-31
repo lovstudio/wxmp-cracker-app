@@ -2,17 +2,40 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  Columns3Icon,
   DownloadIcon,
   ExternalLinkIcon,
+  FileDownIcon,
   FileX2Icon,
   LoaderCircleIcon,
   PenLineIcon,
   PlayCircleIcon,
+  RotateCcwIcon,
+  SearchIcon,
+  SlidersHorizontalIcon,
   TrendingUpIcon,
 } from "lucide-react"
 import type { WorkspaceTabId } from "@/components/top-bar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -31,9 +54,38 @@ import { runWithProviderExecutionReport } from "@/lib/gateway"
 import { normalizeWechatImageUrl } from "@/lib/media"
 import { copyableToast as toast } from "@/lib/toast"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import {
+  activeArticleFilterCount,
+  DEFAULT_ARTICLE_FILTERS,
+  type ArticleTagFilter,
+  type ArticleFilters,
+  type ArticleTypeFilter,
+  type ContentCacheFilter,
+  type CopyrightFilter,
+} from "@/lib/article-filters"
+import {
+  ARTICLE_TABLE_COLUMNS,
+  activeArticleManagementFilterCount,
+  articleManagementAuthorValue,
+  articleManagementTagValue,
+  articleTableCellValue,
+  articleTableExportFileName,
+  articleTypeLabel,
+  buildArticleTableCsv,
+  copyrightLabel,
+  DEFAULT_ARTICLE_MANAGEMENT_FILTERS,
+  DEFAULT_ARTICLE_TABLE_COLUMNS,
+  filterArticleTableRows,
+  type ArticleAuthorFilter,
+  type ArticleCompletenessFilter,
+  type ArticleLocalFileFilter,
+  type ArticleManagementFilters,
+  type ArticlePresenceFilter,
+  type ArticleTableColumnId,
+} from "@/lib/article-table-export"
 
 interface AccountWorkspaceProps {
-  tab: Exclude<WorkspaceTabId, "reader" | "github-sync">
+  tab: Exclude<WorkspaceTabId, "reader" | "tags" | "github-sync">
   account: Account | null
   refreshKey: number
   onContentFetched?: (aid: string) => void
@@ -63,7 +115,7 @@ export function AccountWorkspace({
 
   if (tab === "collection") {
     return (
-      <CollectionManager
+      <ArticleManager
         account={account}
         refreshKey={refreshKey}
         onContentFetched={onContentFetched}
@@ -83,7 +135,9 @@ export function AccountWorkspace({
   return <StyleAnalysis account={account} refreshKey={refreshKey} />
 }
 
-function CollectionManager({
+const ARTICLE_MANAGER_COLUMNS_STORAGE_KEY = "wxmp:article-manager-columns:v2"
+
+function ArticleManager({
   account,
   refreshKey,
   onContentFetched,
@@ -96,14 +150,77 @@ function CollectionManager({
 }) {
   const { articles, setArticles, loading } = useAccountArticles(
     account.fakeid,
-    refreshKey
+    refreshKey,
+    "management"
   )
   const [fetchingAid, setFetchingAid] = useState<string | null>(null)
   const [resuming, setResuming] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [query, setQuery] = useState("")
+  const [filters, setFilters] = useState<ArticleFilters>(
+    DEFAULT_ARTICLE_FILTERS
+  )
+  const [managementFilters, setManagementFilters] =
+    useState<ArticleManagementFilters>(DEFAULT_ARTICLE_MANAGEMENT_FILTERS)
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
+  const [visibleColumns, setVisibleColumns] = useState<ArticleTableColumnId[]>(
+    readArticleManagerColumns
+  )
+  const filteredArticles = useMemo(
+    () => filterArticleTableRows(articles, query, filters, managementFilters),
+    [articles, filters, managementFilters, query]
+  )
+  const tagOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          articles.flatMap((article) =>
+            (article.tags ?? []).map((tag) => tag.trim()).filter(Boolean)
+          )
+        )
+      ).sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [articles]
+  )
+  const authorOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          articles
+            .map((article) => article.author?.trim() ?? "")
+            .filter(Boolean)
+        )
+      ).sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [articles]
+  )
   const cachedCount = articles.filter((article) => article.has_content).length
+  const advancedFilterCount =
+    activeArticleManagementFilterCount(managementFilters)
+  const filterCount =
+    activeArticleFilterCount(filters) +
+    advancedFilterCount +
+    (query.trim() ? 1 : 0)
+  const dateRangeInvalid = Boolean(
+    managementFilters.publishedFrom &&
+    managementFilters.publishedTo &&
+    managementFilters.publishedFrom > managementFilters.publishedTo
+  )
   const nextResumeLimit = Math.min(Math.max(articles.length + 20, 20), 500)
-  const collectionBusy = Boolean(fetchingAid) || resuming
+  const collectionBusy = Boolean(fetchingAid) || resuming || exporting
   const canResume = !loading && !collectionBusy && articles.length < 500
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ARTICLE_MANAGER_COLUMNS_STORAGE_KEY,
+      JSON.stringify(visibleColumns)
+    )
+  }, [visibleColumns])
+
+  useEffect(() => {
+    setQuery("")
+    setFilters(DEFAULT_ARTICLE_FILTERS)
+    setManagementFilters(DEFAULT_ARTICLE_MANAGEMENT_FILTERS)
+    setAdvancedFiltersOpen(false)
+  }, [account.fakeid])
 
   const fetchContent = async (article: ArticleSummary) => {
     if (collectionBusy) return
@@ -152,7 +269,9 @@ function CollectionManager({
         nextResumeLimit,
         false
       )
-      const updatedArticles = await api.listArticles(account.fakeid)
+      const updatedArticles = await api.listArticleManagementRows(
+        account.fakeid
+      )
       setArticles(
         [...updatedArticles].sort((a, b) => b.create_time - a.create_time)
       )
@@ -169,94 +288,491 @@ function CollectionManager({
     }
   }
 
+  const toggleColumn = (column: ArticleTableColumnId, checked: boolean) => {
+    setVisibleColumns((current) => {
+      if (checked) {
+        return ARTICLE_TABLE_COLUMNS.map((item) => item.id).filter(
+          (id) => id === column || current.includes(id)
+        )
+      }
+      if (current.length === 1) return current
+      return current.filter((id) => id !== column)
+    })
+  }
+
+  const resetFilters = () => {
+    setQuery("")
+    setFilters(DEFAULT_ARTICLE_FILTERS)
+    setManagementFilters(DEFAULT_ARTICLE_MANAGEMENT_FILTERS)
+  }
+
+  const exportTable = async () => {
+    if (loading || exporting || filteredArticles.length === 0) return
+
+    setExporting(true)
+    try {
+      const csv = buildArticleTableCsv(filteredArticles, visibleColumns)
+      const path = await api.exportArticlesTable(
+        articleTableExportFileName(account.nickname),
+        csv
+      )
+      toast.success(
+        `已导出 ${filteredArticles.length} 篇文章的表格数据：${path}`
+      )
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
-    <WorkspaceShell title="采集管理" kicker={account.nickname}>
+    <WorkspaceShell title="文章管理" kicker={account.nickname}>
       <div className="account-metric-grid">
         <Metric label="索引文章" value={articles.length.toLocaleString()} />
-        <Metric label="正文已抓取" value={cachedCount.toLocaleString()} />
         <Metric
-          label="缓存率"
-          value={formatPercent(cachedCount, articles.length)}
+          label="当前结果"
+          value={filteredArticles.length.toLocaleString()}
         />
+        <Metric label="正文已抓取" value={cachedCount.toLocaleString()} />
       </div>
       <div className="workspace-panel overflow-hidden">
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">文章采集队列</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {loading
-                ? "正在读取本地索引"
-                : `当前 ${articles.length} 篇，续采目标 ${nextResumeLimit} 篇`}
+        <div className="space-y-3 border-b border-border/70 px-4 py-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-serif text-base font-semibold">
+                文章数据库
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {loading
+                  ? "正在读取本地索引"
+                  : `显示 ${filteredArticles.length} / ${articles.length} 篇，续采目标 ${nextResumeLimit} 篇`}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" size="sm" variant="outline">
+                    <Columns3Icon className="size-3.5" />
+                    列配置 · {visibleColumns.length}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>显示字段</DropdownMenuLabel>
+                    {ARTICLE_TABLE_COLUMNS.map((column) => {
+                      const checked = visibleColumns.includes(column.id)
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={column.id}
+                          checked={checked}
+                          disabled={checked && visibleColumns.length === 1}
+                          onCheckedChange={(nextChecked) =>
+                            toggleColumn(column.id, nextChecked === true)
+                          }
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          {column.label}
+                        </DropdownMenuCheckboxItem>
+                      )
+                    })}
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      setVisibleColumns([...DEFAULT_ARTICLE_TABLE_COLUMNS])
+                    }
+                  >
+                    <RotateCcwIcon className="size-3.5" />
+                    恢复默认列
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  loading || collectionBusy || filteredArticles.length === 0
+                }
+                onClick={() => void exportTable()}
+              >
+                {exporting ? (
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <FileDownIcon className="size-3.5" />
+                )}
+                {exporting ? "导出中" : "导出表格"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                disabled={!canResume}
+                onClick={() => void resumeCollection()}
+              >
+                {resuming ? (
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlayCircleIcon className="size-3.5" />
+                )}
+                {resuming ? "续采中" : "一键续采"}
+              </Button>
             </div>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            className="shrink-0"
-            disabled={!canResume}
-            onClick={() => void resumeCollection()}
-          >
-            {resuming ? (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
-            ) : (
-              <PlayCircleIcon className="size-3.5" />
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="search-shell relative min-w-64 flex-1 rounded-lg">
+              <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索标题、标签、作者、网址或文件地址"
+                className="h-9 border-0 bg-transparent pl-9 focus-visible:ring-1"
+                aria-label="搜索文章"
+              />
+            </div>
+            <Select
+              value={filters.articleType}
+              onValueChange={(articleType) =>
+                setFilters((current) => ({
+                  ...current,
+                  articleType: articleType as ArticleTypeFilter,
+                }))
+              }
+            >
+              <SelectTrigger className="h-9 w-32" aria-label="筛选内容形态">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部形态</SelectItem>
+                <SelectItem value="article">图文</SelectItem>
+                <SelectItem value="sticker">贴图</SelectItem>
+                <SelectItem value="other">其他形态</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={filters.copyright}
+              onValueChange={(copyright) =>
+                setFilters((current) => ({
+                  ...current,
+                  copyright: copyright as CopyrightFilter,
+                }))
+              }
+            >
+              <SelectTrigger className="h-9 w-32" aria-label="筛选版权属性">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部版权</SelectItem>
+                <SelectItem value="original">原创</SelectItem>
+                <SelectItem value="reprint">转载</SelectItem>
+                <SelectItem value="default">默认</SelectItem>
+                <SelectItem value="unknown">未标注</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={filters.contentCache}
+              onValueChange={(contentCache) =>
+                setFilters((current) => ({
+                  ...current,
+                  contentCache: contentCache as ContentCacheFilter,
+                }))
+              }
+            >
+              <SelectTrigger className="h-9 w-32" aria-label="筛选正文状态">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部正文</SelectItem>
+                <SelectItem value="cached">已抓取</SelectItem>
+                <SelectItem value="missing">未抓取</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-9"
+              aria-expanded={advancedFiltersOpen}
+              aria-controls="article-management-advanced-filters"
+              onClick={() => setAdvancedFiltersOpen((open) => !open)}
+            >
+              <SlidersHorizontalIcon className="size-3.5" />
+              精细筛选
+              {advancedFilterCount > 0 && ` · ${advancedFilterCount}`}
+            </Button>
+            {filterCount > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={resetFilters}
+              >
+                <RotateCcwIcon className="size-3.5" />
+                清除筛选 · {filterCount}
+              </Button>
             )}
-            {resuming ? "续采中" : "一键续采"}
-          </Button>
+          </div>
+          {advancedFiltersOpen && (
+            <div
+              id="article-management-advanced-filters"
+              className="rounded-xl border border-border/70 bg-muted/25 p-3"
+            >
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="font-serif text-sm font-semibold">
+                    精细筛选
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    按标签、作者、发布日期、网址、文件和字段完整度组合筛选。
+                  </div>
+                </div>
+                {advancedFilterCount > 0 && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    onClick={() =>
+                      setManagementFilters(DEFAULT_ARTICLE_MANAGEMENT_FILTERS)
+                    }
+                  >
+                    <RotateCcwIcon className="size-3" />
+                    重置精细筛选
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <ArticleFilterField label="标签">
+                  <Select
+                    value={managementFilters.tag}
+                    onValueChange={(tag) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        tag: tag as ArticleTagFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="h-9 w-full" aria-label="筛选标签">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部标签</SelectItem>
+                      <SelectItem value="tagged">有标签</SelectItem>
+                      <SelectItem value="untagged">无标签</SelectItem>
+                      {tagOptions.map((tag) => (
+                        <SelectItem
+                          key={tag}
+                          value={articleManagementTagValue(tag)}
+                        >
+                          {tag}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+                <ArticleFilterField label="作者">
+                  <Select
+                    value={managementFilters.author}
+                    onValueChange={(author) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        author: author as ArticleAuthorFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="h-9 w-full" aria-label="筛选作者">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部作者</SelectItem>
+                      <SelectItem value="missing">未标注作者</SelectItem>
+                      {authorOptions.map((author) => (
+                        <SelectItem
+                          key={author}
+                          value={articleManagementAuthorValue(author)}
+                        >
+                          {author}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+                <ArticleFilterField label="开始日期">
+                  <Input
+                    type="date"
+                    value={managementFilters.publishedFrom}
+                    max={managementFilters.publishedTo || undefined}
+                    className="h-9 bg-background"
+                    aria-label="筛选开始日期"
+                    onChange={(event) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        publishedFrom: event.target.value,
+                      }))
+                    }
+                  />
+                </ArticleFilterField>
+                <ArticleFilterField label="结束日期">
+                  <Input
+                    type="date"
+                    value={managementFilters.publishedTo}
+                    min={managementFilters.publishedFrom || undefined}
+                    className="h-9 bg-background"
+                    aria-label="筛选结束日期"
+                    onChange={(event) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        publishedTo: event.target.value,
+                      }))
+                    }
+                  />
+                </ArticleFilterField>
+                <ArticleFilterField label="原文网址">
+                  <Select
+                    value={managementFilters.originalUrl}
+                    onValueChange={(originalUrl) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        originalUrl: originalUrl as ArticlePresenceFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-9 w-full"
+                      aria-label="筛选原文网址状态"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部网址状态</SelectItem>
+                      <SelectItem value="present">已记录网址</SelectItem>
+                      <SelectItem value="missing">未记录网址</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+                <ArticleFilterField label="封面网址">
+                  <Select
+                    value={managementFilters.coverUrl}
+                    onValueChange={(coverUrl) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        coverUrl: coverUrl as ArticlePresenceFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-9 w-full"
+                      aria-label="筛选封面网址状态"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部封面状态</SelectItem>
+                      <SelectItem value="present">已记录封面</SelectItem>
+                      <SelectItem value="missing">未记录封面</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+                <ArticleFilterField label="本地文件">
+                  <Select
+                    value={managementFilters.localFile}
+                    onValueChange={(localFile) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        localFile: localFile as ArticleLocalFileFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-9 w-full"
+                      aria-label="筛选本地文件状态"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部文件状态</SelectItem>
+                      <SelectItem value="generated">已生成文件</SelectItem>
+                      <SelectItem value="missing">未生成文件</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+                <ArticleFilterField label="字段完整度">
+                  <Select
+                    value={managementFilters.completeness}
+                    onValueChange={(completeness) =>
+                      setManagementFilters((current) => ({
+                        ...current,
+                        completeness: completeness as ArticleCompletenessFilter,
+                      }))
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-9 w-full"
+                      aria-label="筛选字段完整度"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部完整度</SelectItem>
+                      <SelectItem value="complete">核心字段完整</SelectItem>
+                      <SelectItem value="missing_author">缺少作者</SelectItem>
+                      <SelectItem value="missing_digest">缺少摘要</SelectItem>
+                      <SelectItem value="missing_cover">缺少封面</SelectItem>
+                      <SelectItem value="missing_tags">缺少标签</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </ArticleFilterField>
+              </div>
+              {dateRangeInvalid && (
+                <div className="mt-2 text-xs text-destructive">
+                  开始日期不能晚于结束日期，请调整日期范围。
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        <Table>
+        <Table className="min-w-max">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[44%]">文章</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>作者</TableHead>
-              <TableHead>发布时间</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              {visibleColumns.map((column) => (
+                <TableHead
+                  key={column}
+                  className={articleManagerColumnClass(column)}
+                >
+                  {articleManagerColumnLabel(column)}
+                </TableHead>
+              ))}
+              <TableHead className="w-40 text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading &&
               Array.from({ length: 6 }, (_, index) => (
                 <TableRow key={index}>
-                  <TableCell>
-                    <div className="h-3 w-64 rounded bg-muted" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-5 w-20 rounded bg-muted" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-3 w-20 rounded bg-muted/70" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-3 w-24 rounded bg-muted/70" />
-                  </TableCell>
+                  {visibleColumns.map((column) => (
+                    <TableCell key={column}>
+                      <div className="h-3 w-24 rounded bg-muted/70" />
+                    </TableCell>
+                  ))}
                   <TableCell />
                 </TableRow>
               ))}
             {!loading &&
-              articles.map((article) => {
+              filteredArticles.map((article) => {
                 const rowFetching = fetchingAid === article.aid
                 const rowSyncing = resuming
                 const rowBusy = rowFetching || rowSyncing
 
                 return (
                   <TableRow key={article.aid}>
-                    <TableCell>
-                      <div className="max-w-[420px] min-w-0">
-                        <div className="truncate font-medium">
-                          {article.title}
-                        </div>
-                        {article.digest && (
-                          <div className="mt-1 truncate text-xs text-muted-foreground">
-                            {article.digest}
-                          </div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <ArticleStatusBadge
-                        hasContent={article.has_content}
-                        state={
+                    {visibleColumns.map((column) => (
+                      <ArticleManagerCell
+                        key={column}
+                        article={article}
+                        column={column}
+                        status={
                           rowSyncing
                             ? "syncing"
                             : rowFetching
@@ -264,13 +780,7 @@ function CollectionManager({
                               : undefined
                         }
                       />
-                    </TableCell>
-                    <TableCell className="max-w-32 truncate">
-                      {article.author || "未标注"}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {formatDate(article.create_time)}
-                    </TableCell>
+                    ))}
                     <TableCell>
                       <div className="flex justify-end gap-1.5">
                         <Button
@@ -307,13 +817,15 @@ function CollectionManager({
                   </TableRow>
                 )
               })}
-            {!loading && articles.length === 0 && (
+            {!loading && filteredArticles.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={visibleColumns.length + 1}
                   className="h-36 text-center text-muted-foreground"
                 >
-                  当前公众号还没有本地文章索引
+                  {articles.length === 0
+                    ? "当前公众号还没有本地文章索引"
+                    : "当前筛选条件下没有文章"}
                 </TableCell>
               </TableRow>
             )}
@@ -322,6 +834,173 @@ function CollectionManager({
       </div>
     </WorkspaceShell>
   )
+}
+
+function ArticleFilterField({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <span className="block text-[11px] font-medium text-muted-foreground">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+function ArticleManagerCell({
+  article,
+  column,
+  status,
+}: {
+  article: ArticleSummary
+  column: ArticleTableColumnId
+  status?: "fetching" | "syncing"
+}) {
+  if (column === "content_status") {
+    return (
+      <TableCell>
+        <ArticleStatusBadge hasContent={article.has_content} state={status} />
+      </TableCell>
+    )
+  }
+
+  if (column === "title") {
+    return (
+      <TableCell>
+        <div className="max-w-[380px] min-w-64 truncate font-medium">
+          {article.title}
+        </div>
+      </TableCell>
+    )
+  }
+
+  if (column === "digest") {
+    return (
+      <TableCell>
+        <div className="max-w-[360px] min-w-56 truncate text-xs text-muted-foreground">
+          {article.digest || "未填写"}
+        </div>
+      </TableCell>
+    )
+  }
+
+  if (column === "tags") {
+    const tags = article.tags ?? []
+    return (
+      <TableCell>
+        {tags.length > 0 ? (
+          <div className="flex max-w-64 items-center gap-1 overflow-hidden">
+            {tags.slice(0, 3).map((tag) => (
+              <span
+                key={tag}
+                className="shrink-0 rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary"
+              >
+                {tag}
+              </span>
+            ))}
+            {tags.length > 3 && (
+              <span className="text-[11px] text-muted-foreground">
+                +{tags.length - 3}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">无标签</span>
+        )}
+      </TableCell>
+    )
+  }
+
+  if (column === "published_at") {
+    return (
+      <TableCell className="font-mono text-xs text-muted-foreground">
+        {formatDate(article.create_time)}
+      </TableCell>
+    )
+  }
+
+  if (column === "article_type") {
+    return <TableCell>{articleTypeLabel(article.article_type)}</TableCell>
+  }
+
+  if (column === "copyright") {
+    return <TableCell>{copyrightLabel(article.copyright_type)}</TableCell>
+  }
+
+  if (column === "link" || column === "cover") {
+    const url = column === "link" ? article.link : article.cover
+    return (
+      <TableCell>
+        <div
+          className="max-w-64 truncate font-mono text-xs text-muted-foreground"
+          title={url ?? undefined}
+        >
+          {url || "未记录"}
+        </div>
+      </TableCell>
+    )
+  }
+
+  if (column === "local_file_path") {
+    return (
+      <TableCell>
+        <div
+          className="max-w-80 truncate font-mono text-xs text-muted-foreground"
+          title={article.local_file_path ?? undefined}
+        >
+          {article.local_file_path || "未生成"}
+        </div>
+      </TableCell>
+    )
+  }
+
+  return (
+    <TableCell className="max-w-48 truncate text-sm text-muted-foreground">
+      {articleTableCellValue(article, column) || "未标注"}
+    </TableCell>
+  )
+}
+
+function articleManagerColumnLabel(column: ArticleTableColumnId) {
+  return (
+    ARTICLE_TABLE_COLUMNS.find((item) => item.id === column)?.label ?? column
+  )
+}
+
+function articleManagerColumnClass(column: ArticleTableColumnId) {
+  if (column === "title") return "min-w-72"
+  if (column === "tags") return "min-w-40"
+  if (column === "digest") return "min-w-64"
+  if (column === "link" || column === "cover") return "min-w-56"
+  if (column === "local_file_path") return "min-w-72"
+  return "min-w-28"
+}
+
+function readArticleManagerColumns(): ArticleTableColumnId[] {
+  if (typeof window === "undefined") return [...DEFAULT_ARTICLE_TABLE_COLUMNS]
+
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(ARTICLE_MANAGER_COLUMNS_STORAGE_KEY) ?? "[]"
+    )
+    if (!Array.isArray(stored)) return [...DEFAULT_ARTICLE_TABLE_COLUMNS]
+
+    const allowed = new Set(ARTICLE_TABLE_COLUMNS.map((column) => column.id))
+    const columns = stored.filter(
+      (column): column is ArticleTableColumnId =>
+        typeof column === "string" &&
+        allowed.has(column as ArticleTableColumnId)
+    )
+    return columns.length > 0 ? columns : [...DEFAULT_ARTICLE_TABLE_COLUMNS]
+  } catch {
+    return [...DEFAULT_ARTICLE_TABLE_COLUMNS]
+  }
 }
 
 function AccountProfile({ account }: { account: Account }) {
@@ -587,15 +1266,22 @@ function articleStatusLabel(state: ArticleStatusState): string {
   return "正文未抓取"
 }
 
-function useAccountArticles(fakeid: string, refreshKey: number) {
+function useAccountArticles(
+  fakeid: string,
+  refreshKey: number,
+  source: "summary" | "management" = "summary"
+) {
   const [articles, setArticles] = useState<ArticleSummary[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api
-      .listArticles(fakeid)
+    const request =
+      source === "management"
+        ? api.listArticleManagementRows(fakeid)
+        : api.listArticles(fakeid)
+    request
       .then((result) => {
         if (!cancelled) {
           setArticles([...result].sort((a, b) => b.create_time - a.create_time))
@@ -607,7 +1293,7 @@ function useAccountArticles(fakeid: string, refreshKey: number) {
     return () => {
       cancelled = true
     }
-  }, [fakeid, refreshKey])
+  }, [fakeid, refreshKey, source])
 
   return { articles, setArticles, loading }
 }

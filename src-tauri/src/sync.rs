@@ -33,13 +33,33 @@ pub const SYNC_PROGRESS_EVENT: &str = "github-sync://progress";
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "stage", rename_all = "snake_case")]
 pub enum SyncProgress {
-    Start { total_candidates: usize },
-    Prepare { message: String },
-    Render { current: usize, total: usize, title: String },
-    Image { current: usize, total: usize, url: String },
-    Commit { changed: usize },
-    Push { message: String },
-    Done { pushed: usize, skipped: usize, message: String },
+    Start {
+        total_candidates: usize,
+    },
+    Prepare {
+        message: String,
+    },
+    Render {
+        current: usize,
+        total: usize,
+        title: String,
+    },
+    Image {
+        current: usize,
+        total: usize,
+        url: String,
+    },
+    Commit {
+        changed: usize,
+    },
+    Push {
+        message: String,
+    },
+    Done {
+        pushed: usize,
+        skipped: usize,
+        message: String,
+    },
 }
 
 fn emit(app: &AppHandle, evt: SyncProgress) {
@@ -115,7 +135,14 @@ pub fn sync_articles(app: &AppHandle, opts: SyncOptions) -> Result<SyncSummary> 
     );
 
     emit(app, SyncProgress::Commit { changed: pushed });
-    commit_and_push(&repo_dir, &repo_full_name, &settings.branch, &token, &commit_msg, app)?;
+    commit_and_push(
+        &repo_dir,
+        &repo_full_name,
+        &settings.branch,
+        &token,
+        &commit_msg,
+        app,
+    )?;
 
     settings.last_synced_at = Some(Utc::now().timestamp());
     settings.last_error = None;
@@ -292,8 +319,8 @@ fn render_into_dir(
             continue;
         };
 
-        let account = db::get_account(&article.fakeid)?
-            .unwrap_or_else(|| fallback_account(&article.fakeid));
+        let account =
+            db::get_account(&article.fakeid)?.unwrap_or_else(|| fallback_account(&article.fakeid));
         let nickname = account.nickname.clone();
         let account_slug = title_slug(&nickname, 40);
 
@@ -524,8 +551,8 @@ fn extract_html_image_urls(html: &str) -> Vec<String> {
     let data_src = DATA_SRC
         .get_or_init(|| Regex::new(r#"(?is)\bdata-src\s*=\s*["']([^"']+)["']"#).expect("data-src"));
     // Avoid matching the `src` inside `data-src` by forbidding a leading `-`.
-    let src = SRC
-        .get_or_init(|| Regex::new(r#"(?is)[^-a-z]src\s*=\s*["']([^"']+)["']"#).expect("src"));
+    let src =
+        SRC.get_or_init(|| Regex::new(r#"(?is)[^-a-z]src\s*=\s*["']([^"']+)["']"#).expect("src"));
 
     img.find_iter(html)
         .filter_map(|m| {
@@ -609,7 +636,10 @@ fn rewrite_and_download_images(
     let rewritten = re.replace_all(body, |caps: &regex::Captures| {
         let alt = &caps[1];
         let original = &caps[2];
-        let replaced = mapping.get(original).cloned().unwrap_or_else(|| original.to_string());
+        let replaced = mapping
+            .get(original)
+            .cloned()
+            .unwrap_or_else(|| original.to_string());
         format!("![{alt}]({replaced})")
     });
     Ok(rewritten.into_owned())
@@ -682,7 +712,10 @@ fn url_extension_hint(url: &str) -> Option<&'static str> {
 
 /// Compute a relative path from `markdown_relative` to `target_relative` within repo.
 fn relativize(markdown_rel: &Path, target_rel: &Path, _repo_root: &Path) -> String {
-    let depth = markdown_rel.parent().map(|p| p.components().count()).unwrap_or(0);
+    let depth = markdown_rel
+        .parent()
+        .map(|p| p.components().count())
+        .unwrap_or(0);
     let mut up = String::new();
     for _ in 0..depth {
         up.push_str("../");

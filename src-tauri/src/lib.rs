@@ -14,14 +14,22 @@ use tauri::{
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
 
+mod acquisition;
 mod archive;
 mod auth;
 mod commands;
 mod db;
 mod delta_updater;
+mod feishu;
 mod github;
 mod license;
+mod providers;
+mod public_metrics;
 mod sync;
+#[cfg(target_os = "macos")]
+mod wechat_account_feed;
+#[cfg(target_os = "macos")]
+mod wechat_automation;
 
 const LOGIN_WINDOW_LABEL: &str = "wxmp-login";
 const RELOAD_MENU_ITEM_ID: &str = "reload_app";
@@ -372,13 +380,30 @@ pub fn run() {
             commands::sync_remote_license,
             commands::list_accounts,
             commands::list_articles,
+            commands::list_article_tag_names,
+            commands::list_article_management_rows,
             commands::search_articles,
             commands::get_article,
+            acquisition::create_article_metrics_acquisition_job,
+            acquisition::get_acquisition_job,
+            acquisition::list_acquisition_attempts,
+            acquisition::list_acquisition_providers,
+            public_metrics::get_article_public_metrics,
+            public_metrics::capture_article_public_metrics,
+            commands::list_article_tags,
+            commands::list_all_article_tags,
+            commands::list_tag_articles,
+            commands::create_article_tag,
+            commands::create_and_assign_article_tag,
+            commands::update_article_tag,
+            commands::delete_article_tag,
+            commands::set_article_tag,
             commands::cache_db_path,
             commands::article_local_file,
             commands::open_article_local_file,
             commands::reveal_article_local_file,
             commands::export_article_local,
+            commands::export_articles_table,
             commands::resolve_wechat_image,
             commands::search_accounts,
             commands::fetch_account,
@@ -397,6 +422,13 @@ pub fn run() {
             commands::github_sync_settings_set,
             commands::github_sync_articles,
             commands::archive_articles_local,
+            commands::feishu_settings_get,
+            commands::feishu_configure_credentials,
+            commands::feishu_settings_set,
+            commands::feishu_disconnect,
+            commands::feishu_list_spaces,
+            commands::feishu_resolve_wiki_target,
+            commands::feishu_sync_articles,
         ])
         .setup(|app| {
             commands::prewarm_wechat_search_client();
