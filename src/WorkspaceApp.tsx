@@ -521,7 +521,12 @@ function WorkspaceApp() {
     setAddingAccount(true)
     setFetchProgressEvents([initialFetchProgress(account, limit, withContent)])
     try {
-      await api.fetchSelectedAccount(account, limit, withContent)
+      const fetchResult = await api.fetchSelectedAccount(
+        account,
+        limit,
+        withContent
+      )
+      const fetchSummary = parseFetchAccountSummary(fetchResult.stdout)
       const list = await api.listAccounts()
       setAccounts(list)
 
@@ -535,7 +540,14 @@ function WorkspaceApp() {
         setActiveAid(null)
       }
 
-      toast.success(`已新增 ${added?.nickname ?? account.nickname}`)
+      const accountName = added?.nickname ?? account.nickname
+      if (fetchSummary?.article_index_status === "unavailable") {
+        toast.warning(
+          `已保存“${accountName}”，但公开索引暂未收录文章；可稍后重试或用文章链接录入。`
+        )
+      } else {
+        toast.success(`已新增 ${accountName}`)
+      }
       setAddAccountOpen(false)
       setSetupPanelOpen(false)
       setAddAccountInitialQuery("")
@@ -949,6 +961,22 @@ function errorMessage(error: unknown): string {
   }
 
   return message
+}
+
+function parseFetchAccountSummary(stdout: string) {
+  for (const line of stdout.split("\n").reverse()) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith("{")) continue
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        article_index_status?: string
+      }
+      if (parsed.article_index_status) return parsed
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 function initialFetchProgress(
