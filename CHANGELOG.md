@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.8 - 2026-08-31
+
+### Added
+
+- Added a pluggable acquisition job layer with persisted provider attempts and diagnostic IDs, backed initially by the existing article-metrics implementation.
+- Added public-metrics capture, WeChat account-feed parsing, and authenticated desktop automation paths for collecting article engagement data.
+- Added article tags, classification filters, a management table, Excel-friendly CSV export, and agent handoff indexes for accounts and tagged articles.
+- Added Feishu knowledge-base integration settings and incremental article synchronization.
+
+### Changed
+
+- Refined the account setup flow, workspace navigation, article reader actions, and top bar for a clearer first-run and daily-use experience.
+- Extended the bundled wcx sidecar to retain article type and copyright metadata and to backfill classification for existing records.
+
+### Fixed
+
+- Kept local Markdown file actions in sync with newly generated archive files.
+
 ## 0.3.7 - 2026-08-02
 
 ### Added
