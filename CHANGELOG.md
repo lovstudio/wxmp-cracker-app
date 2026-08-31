@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.11 - 2026-08-31
+
+### Fixed
+
+- macOS DMG 在上传后追加 Apple 公证、stapling 与 Gatekeeper 校验，避免下载容器被识别为未公证。
+- 发布流水线新增 `.app` 严格签名、Gatekeeper 与 stapled ticket 验证，公证未生效时不再公开 Release。
+
 ## 0.3.10 - 2026-08-31
 
 ### Added
