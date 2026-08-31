@@ -76,6 +76,16 @@ struct RemoteLicenseRow {
     customer: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct SupabaseAuthUser {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct AdminRoleRow {
+    role: String,
+}
+
 pub fn status(current_account_id: Option<&str>) -> Result<LicenseStatus> {
     let now = current_unix_timestamp();
     let current_account_id = current_account_id.map(ToOwned::to_owned);
@@ -173,12 +183,68 @@ pub fn activate(code: &str, current_account_id: &str) -> Result<LicenseStatus> {
     ))
 }
 
+pub fn activation_code(
+    kind: LicenseKind,
+    account_id: &str,
+    customer: Option<&str>,
+    issued_at: i64,
+) -> Result<String> {
+    let account_id = normalize_account_id(account_id)?;
+    if issued_at <= 0 {
+        return Err(anyhow!("授权时间无效，无法生成激活码。"));
+    }
+
+    let payload = ActivationPayload {
+        v: 1,
+        kind,
+        account_id,
+        issued_at,
+        customer: customer
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    };
+    let payload_json = serde_json::to_vec(&payload).context("序列化激活码内容失败")?;
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json);
+    let mut mac = HmacSha256::new_from_slice(ACTIVATION_SECRET.as_bytes())
+        .map_err(|_| anyhow!("激活码签名器初始化失败"))?;
+    mac.update(payload_b64.as_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    let kind_label = match kind {
+        LicenseKind::Trial => "TRIAL",
+        LicenseKind::Official => "OFFICIAL",
+    };
+
+    Ok(format!(
+        "{CODE_PREFIX}.{kind_label}.{payload_b64}.{signature}"
+    ))
+}
+
+pub async fn activation_code_for_admin(
+    kind: LicenseKind,
+    account_id: &str,
+    customer: Option<&str>,
+    issued_at: i64,
+    access_token: &str,
+) -> Result<String> {
+    assert_admin_access(access_token).await?;
+    activation_code(kind, account_id, customer, issued_at)
+}
+
 pub async fn sync_remote(current_account_id: &str) -> Result<LicenseStatus> {
     let current_account_id = normalize_account_id(current_account_id)?;
     let remote = fetch_remote_license(&current_account_id).await?;
 
     let Some(remote) = remote else {
-        return status(Some(current_account_id.as_str()));
+        let local_status = status(Some(current_account_id.as_str()))?;
+        if local_status.kind.is_some() {
+            return Ok(local_status);
+        }
+
+        return Ok(inactive_status(
+            "云端未找到当前 Lovstudio 账号的有效授权。请管理员核对已授权账号的邮箱或用户 ID、授权状态和到期时间。",
+            Some(current_account_id),
+        ));
     };
 
     install_remote_license(remote, &current_account_id)
@@ -278,6 +344,60 @@ async fn fetch_remote_license(account_id: &str) -> Result<Option<RemoteLicenseRo
     let rows: Vec<RemoteLicenseRow> =
         serde_json::from_str(&body).context("解析远程授权结果失败")?;
     Ok(rows.into_iter().next())
+}
+
+async fn assert_admin_access(access_token: &str) -> Result<()> {
+    let access_token = access_token.trim();
+    if access_token.is_empty() {
+        return Err(anyhow!("管理员会话已失效，请重新登录。"));
+    }
+
+    let url = supabase_url();
+    let key = supabase_publishable_key();
+    if url.trim().is_empty() || key.trim().is_empty() {
+        return Err(anyhow!("未配置远程授权服务。"));
+    }
+
+    let client = reqwest::Client::new();
+    let user_endpoint = format!("{}/auth/v1/user", url.trim_end_matches('/'));
+    let user_response = client
+        .get(user_endpoint)
+        .header("apikey", key.as_str())
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .context("验证管理员登录失败")?;
+    let user_status = user_response.status();
+    let user_body = user_response.text().await.unwrap_or_default();
+    if !user_status.is_success() {
+        return Err(anyhow!("管理员会话已失效，请重新登录。"));
+    }
+    let user: SupabaseAuthUser = serde_json::from_str(&user_body).context("解析管理员身份失败")?;
+
+    let role_endpoint = format!(
+        "{}/rest/v1/user_roles?select=role&user_id=eq.{}&role=eq.admin&limit=1",
+        url.trim_end_matches('/'),
+        urlencoding::encode(user.id.trim())
+    );
+    let role_response = client
+        .get(role_endpoint)
+        .header("apikey", key.as_str())
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .context("检查管理员权限失败")?;
+    let role_status = role_response.status();
+    let role_body = role_response.text().await.unwrap_or_default();
+    if !role_status.is_success() {
+        return Err(anyhow!("管理员权限检查失败（{}）。", role_status.as_u16()));
+    }
+    let roles: Vec<AdminRoleRow> =
+        serde_json::from_str(&role_body).context("解析管理员权限失败")?;
+    if !roles.iter().any(|row| row.role == "admin") {
+        return Err(anyhow!("当前账号无管理员权限，不能查看授权码。"));
+    }
+
+    Ok(())
 }
 
 fn supabase_url() -> String {
@@ -517,4 +637,37 @@ fn current_unix_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_activation_code_is_stable_and_parseable() {
+        let issued_at = 1_785_424_800;
+        let first = activation_code(
+            LicenseKind::Official,
+            " 34b6688b-a54f-405b-91f9-c8604baa8253 ",
+            Some("  customer@example.com  "),
+            issued_at,
+        )
+        .expect("activation code");
+        let second = activation_code(
+            LicenseKind::Official,
+            "34b6688b-a54f-405b-91f9-c8604baa8253",
+            Some("customer@example.com"),
+            issued_at,
+        )
+        .expect("activation code");
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("WXMP.OFFICIAL."));
+
+        let payload = parse_activation_code(&first).expect("parse activation code");
+        assert_eq!(payload.kind, LicenseKind::Official);
+        assert_eq!(payload.account_id, "34b6688b-a54f-405b-91f9-c8604baa8253");
+        assert_eq!(payload.issued_at, issued_at);
+        assert_eq!(payload.customer.as_deref(), Some("customer@example.com"));
+    }
 }

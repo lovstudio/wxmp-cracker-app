@@ -378,6 +378,7 @@ pub fn run() {
             commands::license_status,
             commands::activate_license,
             commands::sync_remote_license,
+            commands::generate_activation_code,
             commands::list_accounts,
             commands::list_articles,
             commands::list_article_tag_names,

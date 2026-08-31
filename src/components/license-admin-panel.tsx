@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import {
   CloudUploadIcon,
+  CopyIcon,
+  EyeIcon,
+  EyeOffIcon,
+  KeyRoundIcon,
   Loader2Icon,
   LogInIcon,
   LogOutIcon,
@@ -30,14 +34,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/hooks/useAuth"
-import type { LicenseKind } from "@/lib/api"
+import { api, type LicenseKind } from "@/lib/api"
 import {
   CLOUD_LICENSE_DAYS,
   listCloudLicenses,
@@ -51,7 +50,8 @@ import {
   updateQuotaSettings,
   type QuotaSettings,
 } from "@/lib/quota"
-import { copyableToast as toast } from "@/lib/toast"
+import { isTauri } from "@/lib/tauri"
+import { copyText, copyableToast as toast } from "@/lib/toast"
 
 interface LicenseAdminPanelProps {
   defaultTargetAccountId?: string | null
@@ -117,7 +117,8 @@ export function LicenseAdminPanel({
   defaultTargetAccountId,
   onAuthorized,
 }: LicenseAdminPanelProps) {
-  const { isActualAdmin, isLoading, profile, signIn, signOut, user } = useAuth()
+  const { isActualAdmin, isLoading, profile, session, signIn, signOut, user } =
+    useAuth()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [targetMode, setTargetMode] = useState<"email" | "uid">("email")
@@ -628,6 +629,7 @@ export function LicenseAdminPanel({
         </TabsContent>
       </Tabs>
       <LicenseListDialog
+        adminAccessToken={session?.access_token ?? null}
         licenses={licenses}
         loading={licensesLoading}
         onOpenChange={setLicenseListOpen}
@@ -645,18 +647,66 @@ export function LicenseAdminPanel({
 }
 
 function LicenseListDialog({
+  adminAccessToken,
   licenses,
   loading,
   onOpenChange,
   onRefresh,
   open,
 }: {
+  adminAccessToken: string | null
   licenses: CloudLicenseWithAccount[]
   loading: boolean
   onOpenChange: (open: boolean) => void
   onRefresh: () => Promise<void>
   open: boolean
 }) {
+  const [activationCodes, setActivationCodes] = useState<
+    Record<string, string>
+  >({})
+  const [activationCodeLoadingKey, setActivationCodeLoadingKey] = useState<
+    string | null
+  >(null)
+  const [activationCodeError, setActivationCodeError] = useState<string | null>(
+    null
+  )
+  const runningInTauri = isTauri()
+
+  const revealActivationCode = async (license: CloudLicense) => {
+    const key = activationCodeKey(license)
+    if (activationCodes[key]) {
+      setActivationCodes((current) => {
+        const next = { ...current }
+        delete next[key]
+        return next
+      })
+      return
+    }
+
+    const issuedAt = Math.floor(new Date(license.updated_at).getTime() / 1000)
+    if (!Number.isFinite(issuedAt)) {
+      setActivationCodeError("授权记录时间无效，无法生成激活码。")
+      return
+    }
+
+    setActivationCodeLoadingKey(key)
+    setActivationCodeError(null)
+    try {
+      const code = await api.generateActivationCode({
+        accessToken: adminAccessToken ?? "",
+        accountId: license.account_id,
+        customer: license.customer,
+        issuedAt,
+        kind: license.kind,
+      })
+      setActivationCodes((current) => ({ ...current, [key]: code }))
+    } catch (caughtError) {
+      setActivationCodeError(errorMessage(caughtError))
+    } finally {
+      setActivationCodeLoadingKey(null)
+    }
+  }
+
   if (!open) return null
 
   return (
@@ -692,7 +742,11 @@ function LicenseListDialog({
           <div className="flex justify-end">
             <Button
               disabled={loading}
-              onClick={() => void onRefresh()}
+              onClick={() => {
+                setActivationCodes({})
+                setActivationCodeError(null)
+                void onRefresh()
+              }}
               size="sm"
               type="button"
               variant="outline"
@@ -713,7 +767,7 @@ function LicenseListDialog({
               {licenses.map((license) => (
                 <div
                   key={license.id}
-                  className="grid gap-1 border-b border-border px-3 py-2.5 last:border-b-0"
+                  className="grid gap-2 border-b border-border px-3 py-3 last:border-b-0"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 truncate text-sm font-medium">
@@ -739,6 +793,71 @@ function LicenseListDialog({
                     </span>
                     <span>到期 {formatDate(license.expires_at)}</span>
                   </div>
+                  {activationCodes[activationCodeKey(license)] ? (
+                    <div className="grid gap-2 rounded-lg border border-border bg-muted/35 p-2.5">
+                      <div className="flex items-center gap-2 text-xs font-medium">
+                        <KeyRoundIcon className="size-3.5 text-primary" />
+                        激活码
+                      </div>
+                      <code className="font-mono text-xs leading-relaxed break-all text-foreground select-all">
+                        {activationCodes[activationCodeKey(license)]}
+                      </code>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          onClick={() =>
+                            void copyText(
+                              activationCodes[activationCodeKey(license)],
+                              "激活码已复制"
+                            )
+                          }
+                          size="sm"
+                          type="button"
+                          variant="outline"
+                        >
+                          <CopyIcon className="size-3.5" />
+                          复制
+                        </Button>
+                        <Button
+                          onClick={() => void revealActivationCode(license)}
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <EyeOffIcon className="size-3.5" />
+                          收起
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end">
+                      <Button
+                        disabled={
+                          !runningInTauri ||
+                          !adminAccessToken ||
+                          !isLicenseActive(license) ||
+                          activationCodeLoadingKey ===
+                            activationCodeKey(license)
+                        }
+                        onClick={() => void revealActivationCode(license)}
+                        size="sm"
+                        title={
+                          runningInTauri
+                            ? undefined
+                            : "激活码签名仅在微探桌面端可用"
+                        }
+                        type="button"
+                        variant="outline"
+                      >
+                        {activationCodeLoadingKey ===
+                        activationCodeKey(license) ? (
+                          <Loader2Icon className="size-3.5 animate-spin" />
+                        ) : (
+                          <EyeIcon className="size-3.5" />
+                        )}
+                        {runningInTauri ? "查看授权码" : "桌面端查看授权码"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -747,6 +866,9 @@ function LicenseListDialog({
               暂无授权记录。
             </div>
           )}
+          {activationCodeError ? (
+            <ErrorMessage message={activationCodeError} />
+          ) : null}
         </CardContent>
       </Card>
     </div>
@@ -775,6 +897,17 @@ function licenseStatusBadgeVariant(license: CloudLicense) {
   if (license.status === "revoked") return "destructive"
   if (new Date(license.expires_at).getTime() <= Date.now()) return "outline"
   return "default"
+}
+
+function isLicenseActive(license: CloudLicense) {
+  return (
+    license.status === "active" &&
+    new Date(license.expires_at).getTime() > Date.now()
+  )
+}
+
+function activationCodeKey(license: CloudLicense) {
+  return `${license.id}:${license.updated_at}`
 }
 
 function licensePrimaryLabel(license: CloudLicenseWithAccount) {

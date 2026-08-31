@@ -175,6 +175,13 @@ export const api = {
     invoke<LicenseStatus>("activate_license", { code, accountId }),
   syncRemoteLicense: (accountId: string) =>
     invoke<LicenseStatus>("sync_remote_license", { accountId }),
+  generateActivationCode: (input: {
+    kind: LicenseKind
+    accountId: string
+    customer?: string | null
+    issuedAt: number
+    accessToken: string
+  }) => invoke<string>("generate_activation_code", input),
   listAccounts: () => invoke<Account[]>("list_accounts"),
   listArticles: (fakeid: string) =>
     invoke<ArticleSummary[]>("list_articles", { fakeid }),

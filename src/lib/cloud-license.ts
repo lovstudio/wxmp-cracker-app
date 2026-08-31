@@ -49,6 +49,7 @@ export async function upsertCloudLicense(input: {
     .single()
 
   if (error) throw error
+  await verifyCloudLicense(data)
   return data
 }
 
@@ -84,7 +85,9 @@ export async function resolveUserIdByEmail(email: string): Promise<string> {
   })
   if (error) throw error
   if (!data) {
-    throw new Error(`未找到邮箱为 ${trimmed} 的 Lovstudio 账号，确认对方已注册。`)
+    throw new Error(
+      `未找到邮箱为 ${trimmed} 的 Lovstudio 账号，确认对方已注册。`
+    )
   }
   return data as string
 }
@@ -92,6 +95,23 @@ export async function resolveUserIdByEmail(email: string): Promise<string> {
 export function licenseExpiresAt(kind: LicenseKind) {
   const durationMs = CLOUD_LICENSE_DAYS[kind] * 86_400_000
   return new Date(Date.now() + durationMs).toISOString()
+}
+
+async function verifyCloudLicense(license: CloudLicense) {
+  const { data, error } = await supabase.rpc("get_wxmp_license", {
+    _account_id: license.account_id,
+  })
+
+  if (error) {
+    throw new Error(`授权记录已写入，但客户端回读失败：${error.message}`)
+  }
+
+  const verified = data?.some((item) => item.id === license.id)
+  if (!verified) {
+    throw new Error(
+      "授权记录已写入，但客户端无法回读为有效授权。请核对账号 ID、授权状态和到期时间。"
+    )
+  }
 }
 
 function nullableText(value?: string | null) {

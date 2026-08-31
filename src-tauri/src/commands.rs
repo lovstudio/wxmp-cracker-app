@@ -256,6 +256,25 @@ pub async fn sync_remote_license(account_id: String) -> Result<license::LicenseS
 }
 
 #[tauri::command]
+pub async fn generate_activation_code(
+    kind: license::LicenseKind,
+    account_id: String,
+    customer: Option<String>,
+    issued_at: i64,
+    access_token: String,
+) -> Result<String, CmdError> {
+    license::activation_code_for_admin(
+        kind,
+        &account_id,
+        customer.as_deref(),
+        issued_at,
+        &access_token,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
 pub fn list_accounts() -> Result<Vec<Account>, CmdError> {
     db::list_accounts().map_err(Into::into)
 }
