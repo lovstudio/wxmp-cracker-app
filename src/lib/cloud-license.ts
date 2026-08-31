@@ -1,5 +1,9 @@
 import { supabase } from "@/integrations/supabase/client"
-import type { Tables, TablesInsert } from "@/integrations/supabase/types"
+import type {
+  Tables,
+  TablesInsert,
+  TablesUpdate,
+} from "@/integrations/supabase/types"
 import type { LicenseKind } from "@/lib/api"
 
 export type CloudLicense = Tables<"wxmp_licenses">
@@ -73,6 +77,35 @@ export async function listCloudLicenses(
     ...license,
     account_email: emailByAccountId.get(license.account_id) ?? null,
   }))
+}
+
+export async function updateCloudLicenseCustomer(input: {
+  licenseId: string
+  customer?: string | null
+}): Promise<CloudLicense> {
+  const licenseId = input.licenseId.trim()
+  if (!licenseId) {
+    throw new Error("授权记录 ID 无效。")
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser()
+  if (userError) throw userError
+  if (!userData.user) {
+    throw new Error("请先登录管理员账号。")
+  }
+
+  const payload: TablesUpdate<"wxmp_licenses"> = {
+    customer: nullableText(input.customer),
+  }
+  const { data, error } = await supabase
+    .from("wxmp_licenses")
+    .update(payload)
+    .eq("id", licenseId)
+    .select("*")
+    .single()
+
+  if (error) throw error
+  return data
 }
 
 export async function resolveUserIdByEmail(email: string): Promise<string> {

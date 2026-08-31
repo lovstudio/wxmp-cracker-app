@@ -8,6 +8,7 @@ import {
   Loader2Icon,
   LogInIcon,
   LogOutIcon,
+  PencilIcon,
   RefreshCwIcon,
   SaveIcon,
   ShieldCheckIcon,
@@ -42,6 +43,7 @@ import {
   listCloudLicenses,
   resolveUserIdByEmail,
   upsertCloudLicense,
+  updateCloudLicenseCustomer,
   type CloudLicense,
   type CloudLicenseWithAccount,
 } from "@/lib/cloud-license"
@@ -670,7 +672,51 @@ function LicenseListDialog({
   const [activationCodeError, setActivationCodeError] = useState<string | null>(
     null
   )
+  const [editingLicenseId, setEditingLicenseId] = useState<string | null>(null)
+  const [customerDraft, setCustomerDraft] = useState("")
+  const [customerSavingId, setCustomerSavingId] = useState<string | null>(null)
+  const [customerError, setCustomerError] = useState<string | null>(null)
   const runningInTauri = isTauri()
+
+  useEffect(() => {
+    if (!open) {
+      setEditingLicenseId(null)
+      setCustomerDraft("")
+      setCustomerError(null)
+    }
+  }, [open])
+
+  const startCustomerEdit = (license: CloudLicenseWithAccount) => {
+    setEditingLicenseId(license.id)
+    setCustomerDraft(licenseCustomerNote(license) ?? "")
+    setCustomerError(null)
+  }
+
+  const saveCustomer = async (license: CloudLicenseWithAccount) => {
+    setCustomerSavingId(license.id)
+    setCustomerError(null)
+    try {
+      await updateCloudLicenseCustomer({
+        licenseId: license.id,
+        customer: customerDraft,
+      })
+      setActivationCodes((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([key]) => !key.startsWith(`${license.id}:`)
+          )
+        )
+      )
+      setEditingLicenseId(null)
+      setCustomerDraft("")
+      await onRefresh()
+      toast.success("备注已更新")
+    } catch (caughtError) {
+      setCustomerError(errorMessage(caughtError))
+    } finally {
+      setCustomerSavingId(null)
+    }
+  }
 
   const revealActivationCode = async (license: CloudLicense) => {
     const key = activationCodeKey(license)
@@ -777,13 +823,77 @@ function LicenseListDialog({
                       {licenseStatusLabel(license)}
                     </Badge>
                   </div>
-                  {license.customer &&
-                  license.customer !== licensePrimaryLabel(license) ? (
-                    <div className="truncate text-xs text-muted-foreground">
-                      <span className="text-foreground/60">备注：</span>
-                      {license.customer}
+                  {editingLicenseId === license.id ? (
+                    <form
+                      className="grid gap-2 rounded-lg border border-border bg-muted/35 p-2.5"
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        void saveCustomer(license)
+                      }}
+                    >
+                      <Label
+                        className="text-xs"
+                        htmlFor={`license-customer-${license.id}`}
+                      >
+                        备注
+                      </Label>
+                      <Input
+                        autoFocus
+                        disabled={customerSavingId === license.id}
+                        id={`license-customer-${license.id}`}
+                        onChange={(event) =>
+                          setCustomerDraft(event.target.value)
+                        }
+                        placeholder="可选，留空可删除备注"
+                        value={customerDraft}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          disabled={customerSavingId === license.id}
+                          onClick={() => {
+                            setEditingLicenseId(null)
+                            setCustomerDraft("")
+                            setCustomerError(null)
+                          }}
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          disabled={customerSavingId === license.id}
+                          size="sm"
+                          type="submit"
+                        >
+                          {customerSavingId === license.id ? (
+                            <Loader2Icon className="size-3.5 animate-spin" />
+                          ) : (
+                            <SaveIcon className="size-3.5" />
+                          )}
+                          保存备注
+                        </Button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <div className="min-w-0 truncate">
+                        <span className="text-foreground/60">备注：</span>
+                        {licenseCustomerNote(license) ?? "暂无备注"}
+                      </div>
+                      <Button
+                        aria-label={`编辑 ${licensePrimaryLabel(license)} 的备注`}
+                        className="shrink-0"
+                        onClick={() => startCustomerEdit(license)}
+                        size="icon-sm"
+                        title="编辑备注"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <PencilIcon className="size-3.5" />
+                      </Button>
                     </div>
-                  ) : null}
+                  )}
                   <div className="truncate font-mono text-xs text-muted-foreground">
                     {license.account_id}
                   </div>
@@ -869,6 +979,7 @@ function LicenseListDialog({
           {activationCodeError ? (
             <ErrorMessage message={activationCodeError} />
           ) : null}
+          {customerError ? <ErrorMessage message={customerError} /> : null}
         </CardContent>
       </Card>
     </div>
@@ -914,6 +1025,13 @@ function licensePrimaryLabel(license: CloudLicenseWithAccount) {
   if (license.account_email) return license.account_email
   if (license.customer && isEmailLike(license.customer)) return license.customer
   return license.customer || license.account_id
+}
+
+function licenseCustomerNote(license: CloudLicenseWithAccount) {
+  if (!license.customer || license.customer === licensePrimaryLabel(license)) {
+    return null
+  }
+  return license.customer
 }
 
 function isEmailLike(value: string) {
