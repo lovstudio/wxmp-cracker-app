@@ -560,8 +560,8 @@ function FetchProcess({
     stage: "prepare",
     status: "running",
     message: withContent
-      ? `准备抓取 ${limit} 篇文章索引，并同步正文`
-      : `准备抓取 ${limit} 篇文章索引`,
+      ? `准备按公众号 ID 抓取 ${limit} 篇文章列表，并同步正文`
+      : `准备按公众号 ID 抓取 ${limit} 篇文章列表`,
     current: 0,
     total: limit,
     title: null,
