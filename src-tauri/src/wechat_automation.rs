@@ -77,7 +77,7 @@ const FIRST_RESULT_TRANSITION_TIMEOUT: Duration = Duration::from_millis(600);
 const FIRST_RESULT_TRANSITION_DELTA_PER_MILLE: usize = 20;
 const RESULT_CLICK_TRANSITION_TIMEOUT: Duration = Duration::from_millis(360);
 const RESULT_CLICK_RETRIES: usize = 1;
-const ACCOUNT_PROFILE_TIMEOUT: Duration = Duration::from_millis(900);
+const ACCOUNT_PROFILE_TIMEOUT: Duration = Duration::from_millis(2_500);
 const ACCOUNT_SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_INDEXEDDB_APPEND_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -291,6 +291,19 @@ enum AccountSearchSurfaceObservation {
     Unobserved,
 }
 
+fn require_matched_account_identity(observation: AccountIdentityObservation) -> Result<(), String> {
+    match observation {
+        AccountIdentityObservation::Matched => Ok(()),
+        AccountIdentityObservation::Mismatched => {
+            Err("微信打开的公众号与目标公众号 ID 不一致；本次未读取文章列表。".to_string())
+        }
+        AccountIdentityObservation::Unobserved => Err(
+            "微信已打开公众号主页，但未能读取并确认该公众号 ID；为避免混入同名账号，本次未读取文章列表。"
+                .to_string(),
+        ),
+    }
+}
+
 pub fn accessibility_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_string("AXTrustedCheckOptionPrompt");
     let value = if prompt {
@@ -323,6 +336,18 @@ pub fn interactive_session_available() -> bool {
 /// reads all article rows and counters written by that one account page. The
 /// account-scoped route never performs a second title search or opens an
 /// individual article.
+pub fn open_account_feed_by_identity(
+    account_query: &str,
+    fakeid: &str,
+) -> Result<WechatArticleSearchSession, String> {
+    open_article_via_search(&WechatArticleSearchTarget {
+        title: account_query,
+        publisher: Some(account_query),
+        fakeid,
+        published_at: 0,
+    })
+}
+
 pub fn open_article_via_search(
     target: &WechatArticleSearchTarget<'_>,
 ) -> Result<WechatArticleSearchSession, String> {
@@ -3150,9 +3175,7 @@ fn open_account_feed_from_search(
         "[DEBUG][wechat_automation] account identity observation={identity_observation:?} elapsed_ms={}",
         operation_started.elapsed().as_millis()
     );
-    if identity_observation == AccountIdentityObservation::Mismatched {
-        return Err("微信打开的公众号与目标公众号 ID 不一致；本次未继续点击文章。".to_string());
-    }
+    require_matched_account_identity(identity_observation)?;
     log::info!(
         "[DEBUG][wechat_automation] account feed ready without title search window_id={} x={} y={} width={} height={} elapsed_ms={}",
         window.id,
@@ -4116,7 +4139,8 @@ mod tests {
         candidate_metadata_from_context, extract_base64_bizuin_values, first_green_result_pixel,
         first_result_green_pixel, first_result_pixel_sample, first_result_render_changed,
         is_article_result_role, is_search_chrome_text, normalized_text, published_date_keys,
-        title_match_rank, WechatArticleSearchTarget,
+        require_matched_account_identity, title_match_rank, AccountIdentityObservation,
+        WechatArticleSearchTarget,
     };
 
     #[test]
@@ -4414,6 +4438,19 @@ mod tests {
         let values = extract_base64_bizuin_values(&bytes);
         assert_eq!(values.len(), 1);
         assert!(values.contains("Mzg3NDc2MjQxMg=="));
+    }
+
+    #[test]
+    fn account_feed_requires_an_explicit_id_match() {
+        assert!(require_matched_account_identity(AccountIdentityObservation::Matched).is_ok());
+
+        let mismatch = require_matched_account_identity(AccountIdentityObservation::Mismatched)
+            .expect_err("mismatched account must be rejected");
+        assert!(mismatch.contains("ID 不一致"));
+
+        let unobserved = require_matched_account_identity(AccountIdentityObservation::Unobserved)
+            .expect_err("unobserved account id must be rejected");
+        assert!(unobserved.contains("未能读取并确认"));
     }
 
     #[test]

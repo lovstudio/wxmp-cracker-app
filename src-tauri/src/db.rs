@@ -186,6 +186,11 @@ pub fn merge_account_metadata_if_exists(account: &AccountUpsert<'_>) -> Result<b
     merge_account_metadata(&conn, account)
 }
 
+pub fn upsert_account_metadata(account: &AccountUpsert<'_>) -> Result<()> {
+    let conn = open()?;
+    upsert_account(&conn, account)
+}
+
 fn merge_account_metadata(conn: &Connection, account: &AccountUpsert<'_>) -> Result<bool> {
     let changed = conn.execute(
         "UPDATE accounts
@@ -852,8 +857,14 @@ pub fn upsert_account_and_article(
     let tx = conn.transaction()?;
 
     upsert_account(&tx, account)?;
+    upsert_article(&tx, article)?;
 
-    tx.execute(
+    tx.commit()?;
+    Ok(())
+}
+
+fn upsert_article(conn: &Connection, article: &ArticleUpsert<'_>) -> Result<()> {
+    conn.execute(
         "INSERT INTO articles
             (aid, fakeid, title, link, digest, cover, author,
              create_time, update_time, article_type, copyright_type,
@@ -865,15 +876,15 @@ pub fn upsert_account_and_article(
          ON CONFLICT(aid) DO UPDATE SET
             title = excluded.title,
             link = excluded.link,
-            digest = excluded.digest,
-            cover = excluded.cover,
-            author = excluded.author,
+            digest = COALESCE(NULLIF(TRIM(excluded.digest), ''), articles.digest),
+            cover = COALESCE(NULLIF(TRIM(excluded.cover), ''), articles.cover),
+            author = COALESCE(NULLIF(TRIM(excluded.author), ''), articles.author),
             create_time = excluded.create_time,
             update_time = excluded.update_time,
             article_type = COALESCE(excluded.article_type, articles.article_type),
             copyright_type = COALESCE(excluded.copyright_type, articles.copyright_type),
-            content_html = excluded.content_html,
-            content_md = excluded.content_md,
+            content_html = COALESCE(NULLIF(TRIM(excluded.content_html), ''), articles.content_html),
+            content_md = COALESCE(NULLIF(TRIM(excluded.content_md), ''), articles.content_md),
             fetched_at = excluded.fetched_at",
         (
             article.aid,
@@ -891,8 +902,6 @@ pub fn upsert_account_and_article(
             article.content_md,
         ),
     )?;
-
-    tx.commit()?;
     Ok(())
 }
 
@@ -1104,6 +1113,86 @@ mod tests {
             )
             .unwrap();
         assert_eq!(avatar, "https://wx.qlogo.cn/avatar/64");
+    }
+
+    #[test]
+    fn metadata_only_article_upsert_preserves_existing_body() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        ensure_runtime_schema(&conn).unwrap();
+        upsert_account(
+            &conn,
+            &AccountUpsert {
+                fakeid: "account-id",
+                nickname: "测试公众号",
+                alias: None,
+                signature: None,
+                avatar: None,
+            },
+        )
+        .unwrap();
+        let first = ArticleUpsert {
+            aid: "42_1",
+            fakeid: "account-id",
+            title: "旧标题",
+            link: "https://mp.weixin.qq.com/s?mid=42&idx=1",
+            digest: Some("旧摘要"),
+            cover: Some("https://mmbiz.qpic.cn/old.jpg"),
+            author: Some("旧作者"),
+            create_time: 100,
+            update_time: Some(100),
+            article_type: Some(9),
+            copyright_type: Some(1),
+            content_html: Some("<p>正文</p>"),
+            content_md: Some("正文"),
+        };
+        upsert_article(&conn, &first).unwrap();
+
+        let metadata_only = ArticleUpsert {
+            aid: "42_1",
+            fakeid: "account-id",
+            title: "新标题",
+            link: "https://mp.weixin.qq.com/s?__biz=account-id&mid=42&idx=1",
+            digest: None,
+            cover: None,
+            author: None,
+            create_time: 100,
+            update_time: Some(100),
+            article_type: None,
+            copyright_type: None,
+            content_html: None,
+            content_md: None,
+        };
+        upsert_article(&conn, &metadata_only).unwrap();
+
+        let row = conn
+            .query_row(
+                "SELECT title, digest, cover, author, content_html, content_md,
+                        article_type, copyright_type
+                 FROM articles WHERE aid = '42_1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "新标题");
+        assert_eq!(row.1, "旧摘要");
+        assert_eq!(row.2, "https://mmbiz.qpic.cn/old.jpg");
+        assert_eq!(row.3, "旧作者");
+        assert_eq!(row.4, "<p>正文</p>");
+        assert_eq!(row.5, "正文");
+        assert_eq!(row.6, 9);
+        assert_eq!(row.7, 1);
     }
 
     #[test]

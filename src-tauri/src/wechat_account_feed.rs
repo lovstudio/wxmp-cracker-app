@@ -19,14 +19,22 @@ const MAX_BLOB_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_BLOBS_TO_SCAN: usize = 64;
 
-#[derive(Clone, Debug, PartialEq)]
+// Do not derive `Debug`: `transient_fetch_link` may contain short-lived
+// WeChat session parameters and must never be emitted by diagnostic logging.
+#[derive(Clone, PartialEq)]
 pub struct AccountFeedArticleMetrics {
     pub biz: String,
     pub mid: String,
     pub idx: String,
     pub sn: Option<String>,
+    pub link: String,
+    /// Authorized article URL from the current WeChat page. It may contain
+    /// short-lived session parameters and must stay in memory only.
+    pub transient_fetch_link: Option<String>,
     pub title: String,
     pub publisher: Option<String>,
+    pub digest: Option<String>,
+    pub cover: Option<String>,
     pub create_time: Option<i64>,
     pub update_time_ms: i64,
     pub read_count: Option<i64>,
@@ -54,6 +62,24 @@ impl AccountFeedArticleMetrics {
 pub fn read_account_feed_metrics(
     expected_fakeid: &str,
     minimum_update_time_ms: i64,
+) -> Result<Vec<AccountFeedArticleMetrics>, String> {
+    read_account_feed_records(expected_fakeid, minimum_update_time_ms, true)
+}
+
+/// Reads article metadata from the target account's profile batches. Unlike
+/// `read_account_feed_metrics`, rows remain valid when WeChat omits social
+/// counters: the account id plus `(mid, idx)` are the list identity.
+pub fn read_account_feed_articles(
+    expected_fakeid: &str,
+    minimum_update_time_ms: i64,
+) -> Result<Vec<AccountFeedArticleMetrics>, String> {
+    read_account_feed_records(expected_fakeid, minimum_update_time_ms, false)
+}
+
+fn read_account_feed_records(
+    expected_fakeid: &str,
+    minimum_update_time_ms: i64,
+    require_metrics: bool,
 ) -> Result<Vec<AccountFeedArticleMetrics>, String> {
     let expected_fakeid = expected_fakeid.trim();
     if expected_fakeid.is_empty() {
@@ -84,7 +110,7 @@ pub fn read_account_feed_metrics(
             record.update_time_ms = record.update_time_ms.max(candidate.modified_at_ms);
             if record.biz != expected_fakeid
                 || record.update_time_ms < minimum_update_time_ms
-                || !record.has_any_metric()
+                || (require_metrics && !record.has_any_metric())
             {
                 continue;
             }
@@ -289,20 +315,22 @@ fn parse_batch_json(
         let bar = content
             .pointer("/user_info/appmsg_bar_data")
             .or_else(|| content.get("appmsg_bar_data"));
-        let Some(bar) = bar else {
-            continue;
-        };
         let update_time_ms = json_i64(entry.get("updateTime").unwrap_or(&Value::Null))
             .unwrap_or(fallback_update_time_ms);
-        let sn = content
-            .get("link")
-            .and_then(Value::as_str)
-            .and_then(parse_sn_from_article_link);
+        let content_link = content.get("link").and_then(Value::as_str);
+        let sn = content_link.and_then(parse_sn_from_article_link);
+        let Some(link) = canonical_article_url(&biz, &mid, &idx, sn.as_deref()) else {
+            continue;
+        };
+        let transient_fetch_link =
+            content_link.and_then(|value| safe_transient_article_link(value, &biz, &mid, &idx));
         records.push(AccountFeedArticleMetrics {
             biz,
             mid,
             idx,
             sn,
+            link,
+            transient_fetch_link,
             title: title.to_string(),
             publisher: content
                 .get("nick_name")
@@ -310,18 +338,89 @@ fn parse_batch_json(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            digest: first_trimmed_string(&content, &["digest", "desc"]),
+            cover: first_trimmed_string(&content, &["cover", "cover_url", "cdn_url", "thumb_url"]),
             create_time: json_i64(content.get("create_timestamp").unwrap_or(&Value::Null))
                 .or_else(|| json_i64(content.get("ori_create_time").unwrap_or(&Value::Null))),
             update_time_ms,
-            read_count: json_i64(bar.get("read_num").unwrap_or(&Value::Null)),
-            like_count: json_i64(bar.get("old_like_count").unwrap_or(&Value::Null)),
-            recommend_count: json_i64(bar.get("like_count").unwrap_or(&Value::Null)),
-            share_count: json_i64(bar.get("share_count").unwrap_or(&Value::Null)),
-            comment_count: json_i64(bar.get("comment_count").unwrap_or(&Value::Null)),
-            collect_count: json_i64(bar.get("collect_count").unwrap_or(&Value::Null)),
+            read_count: bar.and_then(|value| json_i64(value.get("read_num")?)),
+            like_count: bar.and_then(|value| json_i64(value.get("old_like_count")?)),
+            recommend_count: bar.and_then(|value| json_i64(value.get("like_count")?)),
+            share_count: bar.and_then(|value| json_i64(value.get("share_count")?)),
+            comment_count: bar.and_then(|value| json_i64(value.get("comment_count")?)),
+            collect_count: bar.and_then(|value| json_i64(value.get("collect_count")?)),
         });
     }
     Ok(records)
+}
+
+fn canonical_article_url(biz: &str, mid: &str, idx: &str, sn: Option<&str>) -> Option<String> {
+    if biz.is_empty()
+        || biz.len() > 256
+        || !biz.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b'-' | b'_')
+        })
+        || mid.is_empty()
+        || !mid.bytes().all(|byte| byte.is_ascii_digit())
+        || idx.is_empty()
+        || !idx.bytes().all(|byte| byte.is_ascii_digit())
+        || sn.is_some_and(|value| {
+            value.len() > 256
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    {
+        return None;
+    }
+    let mut url = reqwest::Url::parse("https://mp.weixin.qq.com/s").ok()?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("__biz", biz);
+        pairs.append_pair("mid", mid);
+        pairs.append_pair("idx", idx);
+        if let Some(sn) = sn {
+            pairs.append_pair("sn", sn);
+        }
+    }
+    Some(url.to_string())
+}
+
+fn safe_transient_article_link(value: &str, biz: &str, mid: &str, idx: &str) -> Option<String> {
+    let decoded = value.replace("&amp;", "&");
+    let mut url = reqwest::Url::parse(decoded.trim()).ok()?;
+    if url.scheme() == "http" {
+        url.set_scheme("https").ok()?;
+    }
+    if url.scheme() != "https"
+        || url.host_str() != Some("mp.weixin.qq.com")
+        || !(url.path() == "/s" || url.path().starts_with("/s/"))
+    {
+        return None;
+    }
+    let query_value = |name: &str| {
+        url.query_pairs()
+            .find_map(|(key, value)| (key == name).then(|| value.into_owned()))
+    };
+    if url.path() == "/s"
+        && (query_value("__biz").as_deref() != Some(biz)
+            || query_value("mid").as_deref() != Some(mid)
+            || query_value("idx").as_deref() != Some(idx))
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+fn first_trimmed_string(value: &Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        value
+            .get(*name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
 }
 
 fn parse_request_identity(value: &str) -> Option<(String, String, String)> {
@@ -503,7 +602,7 @@ mod tests {
             "title": "测试文章",
             "nick_name": "测试公众号",
             "create_timestamp": 1_787_600_000_i64,
-            "link": "https://mp.weixin.qq.com/s?__biz=TXpnM05EYzJNalF4TWc==&amp;mid=2247495151&amp;idx=1&amp;sn=abc123",
+            "link": "https://mp.weixin.qq.com/s?__biz=Mzg3NDc2MjQxMg%3D%3D&amp;mid=2247495151&amp;idx=1&amp;sn=abc123",
             "user_info": {"appmsg_bar_data": {
                 "read_num": 2212,
                 "old_like_count": 51,
@@ -536,12 +635,72 @@ mod tests {
         assert_eq!(record.idx, "1");
         assert_eq!(record.title, "测试文章");
         assert_eq!(record.sn.as_deref(), Some("abc123"));
+        assert_eq!(
+            record.link,
+            "https://mp.weixin.qq.com/s?__biz=Mzg3NDc2MjQxMg%3D%3D&mid=2247495151&idx=1&sn=abc123"
+        );
+        assert!(record.transient_fetch_link.is_some());
         assert_eq!(record.read_count, Some(2212));
         assert_eq!(record.like_count, Some(51));
         assert_eq!(record.recommend_count, Some(27));
         assert_eq!(record.share_count, Some(367));
         assert_eq!(record.comment_count, Some(0));
         assert_eq!(record.collect_count, Some(125));
+    }
+
+    #[test]
+    fn keeps_article_identity_when_social_metrics_are_absent() {
+        let content = serde_json::json!({
+            "title": "只有列表元数据的文章",
+            "nick_name": "测试公众号",
+            "digest": "摘要",
+            "cdn_url": "https://mmbiz.qpic.cn/cover.jpg",
+            "create_timestamp": 1_787_600_000_i64,
+            "link": "https://mp.weixin.qq.com/s?__biz=Mzg3NDc2MjQxMg%3D%3D&amp;mid=2247495152&amp;idx=2&amp;sn=def456&amp;key=short-lived-secret&amp;pass_ticket=short-lived-ticket"
+        });
+        let data = serde_json::json!({
+            "mp.weixin.qq.com/s?__biz=Mzg3NDc2MjQxMg%3D%3D&mid=2247495152&idx=2": {
+                "Content": serde_json::to_string(&content).expect("serialize content"),
+                "updateTime": 1_787_732_473_018_i64
+            }
+        })
+        .to_string();
+
+        let records = parse_batch_json(&data, 0).expect("parse list-only batch");
+
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert!(!record.has_any_metric());
+        assert_eq!(record.biz, "Mzg3NDc2MjQxMg==");
+        assert_eq!(record.mid, "2247495152");
+        assert_eq!(record.idx, "2");
+        assert_eq!(record.digest.as_deref(), Some("摘要"));
+        assert_eq!(
+            record.cover.as_deref(),
+            Some("https://mmbiz.qpic.cn/cover.jpg")
+        );
+        assert_eq!(
+            record.link,
+            "https://mp.weixin.qq.com/s?__biz=Mzg3NDc2MjQxMg%3D%3D&mid=2247495152&idx=2&sn=def456"
+        );
+        let transient = record
+            .transient_fetch_link
+            .as_deref()
+            .expect("authorized link should remain available in memory");
+        assert!(transient.contains("key=short-lived-secret"));
+        assert!(transient.contains("pass_ticket=short-lived-ticket"));
+        assert!(!record.link.contains("short-lived"));
+    }
+
+    #[test]
+    fn rejects_a_transient_link_for_another_article_identity() {
+        assert!(safe_transient_article_link(
+            "https://mp.weixin.qq.com/s?__biz=other&mid=42&idx=1&key=secret",
+            "expected",
+            "42",
+            "1"
+        )
+        .is_none());
     }
 
     #[test]
