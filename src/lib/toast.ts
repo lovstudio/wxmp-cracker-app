@@ -25,7 +25,10 @@ export const copyableToast = {
     isWxmpAuthError(message)
       ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
       : isWxmpRateLimitError(message)
-        ? showWxmpRecoveryToast(message, onLogin, "重新登录", options)
+        ? showCopyableToast("error", message, {
+            duration: 12000,
+            ...options,
+          })
         : showCopyableToast("error", message, options),
   info: (message: string, options?: ExternalToast) =>
     showCopyableToast("info", message, options),

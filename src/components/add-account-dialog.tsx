@@ -451,8 +451,12 @@ function AddAccountDialogContent({
                 {hasCurrentResults ? "确认选择" : "搜索公众号"}
               </Button>
             ) : rateLimited ? (
-              <Button type="button" disabled={actionBusy} onClick={onLogin}>
-                完成验证后重新登录
+              <Button
+                type="button"
+                disabled={actionBusy}
+                onClick={switchToArticleImport}
+              >
+                改用文章链接
               </Button>
             ) : (
               <Button type="submit" disabled={!canFetch || busy}>
@@ -560,8 +564,8 @@ function FetchProcess({
     stage: "prepare",
     status: "running",
     message: withContent
-      ? `准备按公众号 ID 抓取 ${limit} 篇文章列表，并同步正文`
-      : `准备按公众号 ID 抓取 ${limit} 篇文章列表`,
+      ? `准备获取 ${limit} 篇文章索引，并同步正文`
+      : `准备获取 ${limit} 篇文章索引`,
     current: 0,
     total: limit,
     title: null,
@@ -678,8 +682,8 @@ function FetchProcess({
             <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
             <span>
               {localCooldown
-                ? "这是上一次微信返回 200013 后记录的本地冷却；本次没有再请求微信。重新扫码成功后会创建新会话，再尝试一次标准列表请求。"
-                : "微信文章列表接口刚返回 ret=200013；这不等于公众号后台账号异常。已完成内容会保留，应用会停止当前批次，避免继续叠加请求。"}
+                ? "这是应用依据上一次 ret=200013 设置的本地保护，本次没有请求微信。重新登录不会解除；界面所示时间也不是微信给出的解封时间。"
+                : "微信文章列表接口刚返回 ret=200013；应用随后自行暂停该接口一小时。这个保护时间不是微信给出的解封时间，也不等于公众号后台账号异常。"}
             </span>
           </div>
         </div>

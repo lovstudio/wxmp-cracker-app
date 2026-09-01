@@ -147,7 +147,21 @@ jobs:
           if ($null -eq $exe) {
             throw "Expected Windows application executable not found in src-tauri\target\release"
           }
-          Compress-Archive -Path $exe.FullName -DestinationPath $asset -Force
+          $wcx = Get-Item -Path "src-tauri\target\release\wcx.exe" -ErrorAction SilentlyContinue
+          if ($null -eq $wcx) {
+            throw "Expected Windows wcx sidecar not found next to the application executable"
+          }
+          Compress-Archive -Path @($exe.FullName, $wcx.FullName) -DestinationPath $asset -Force
+          $verifyDir = Join-Path $env:RUNNER_TEMP "verify-windows-zip"
+          Expand-Archive -Path $asset -DestinationPath $verifyDir -Force
+          $packagedApp = Get-ChildItem -Path $verifyDir -Filter "*.exe" -File |
+            Where-Object { $_.Name -ne "wcx.exe" } |
+            Select-Object -First 1
+          $packagedWcx = Get-Item -Path (Join-Path $verifyDir "wcx.exe") -ErrorAction SilentlyContinue
+          if ($null -eq $packagedApp -or $null -eq $packagedWcx) {
+            throw "Windows ZIP must contain the application executable and wcx.exe sidecar"
+          }
+          & $packagedWcx.FullName --version
           gh release upload $tag $asset --repo "$env:GITHUB_REPOSITORY" --clobber
 
       - name: Build and upload Linux app bundles
@@ -361,16 +375,17 @@ jobs:
 
           create_delta() {
             local target="$1"
-            local archive="$2"
-            local old_archive="$WORK_DIR/previous-$archive"
-            local new_archive="$WORK_DIR/$archive"
+            local previous_asset="$2"
+            local current_asset="$3"
+            local old_archive="$WORK_DIR/previous-$previous_asset"
+            local new_archive="$WORK_DIR/$current_asset"
             local delta_name="wxmp-cracker-app-${VERSION}-from-${PREVIOUS_TAG#v}-${target}.delta"
             local delta_path="$WORK_DIR/$delta_name"
             local full_size delta_size signature checksum
 
-            gh release download "$PREVIOUS_TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber || return 1
-            mv "$new_archive" "$old_archive" || return 1
-            gh release download "$TAG" --repo "$REPO" --pattern "$archive" --dir "$WORK_DIR" --clobber || return 1
+            gh release download "$PREVIOUS_TAG" --repo "$REPO" --pattern "$previous_asset" --dir "$WORK_DIR" --clobber || return 1
+            mv "$WORK_DIR/$previous_asset" "$old_archive" || return 1
+            gh release download "$TAG" --repo "$REPO" --pattern "$current_asset" --dir "$WORK_DIR" --clobber || return 1
 
             node scripts/generate-macos-delta.mjs \
               --from-version "${PREVIOUS_TAG#v}" \
@@ -405,10 +420,16 @@ jobs:
 
           # Delta packages are an optimization only. The signed full updater
           # manifest above stays publishable if a delta cannot be produced.
-          if ! create_delta "darwin-aarch64" "wxmp-cracker-app-${VERSION}-darwin-aarch64.app.tar.gz"; then
+          if ! create_delta \
+            "darwin-aarch64" \
+            "wxmp-cracker-app-${PREVIOUS_TAG#v}-darwin-aarch64.app.tar.gz" \
+            "wxmp-cracker-app-${VERSION}-darwin-aarch64.app.tar.gz"; then
             echo "Skipping darwin-aarch64 delta; clients will use the full updater bundle."
           fi
-          if ! create_delta "darwin-x86_64" "wxmp-cracker-app-${VERSION}-darwin-x64.app.tar.gz"; then
+          if ! create_delta \
+            "darwin-x86_64" \
+            "wxmp-cracker-app-${PREVIOUS_TAG#v}-darwin-x64.app.tar.gz" \
+            "wxmp-cracker-app-${VERSION}-darwin-x64.app.tar.gz"; then
             echo "Skipping darwin-x86_64 delta; clients will use the full updater bundle."
           fi
           if bun tauri signer sign "$DELTA_FEED" \

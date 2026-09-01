@@ -63,4 +63,63 @@ describe("article fetch authentication flow", () => {
     expect(fillProgressFlow).toContain("setResumeDialogOpen(true)")
     expect(fillProgressFlow).not.toContain("toast.")
   })
+
+  test("rate limiting is never presented as a login recovery action", async () => {
+    const dialogSource = await readFile(
+      new URL("../src/components/add-account-dialog.tsx", import.meta.url),
+      "utf8"
+    )
+    const toastSource = await readFile(
+      new URL("../src/lib/toast.ts", import.meta.url),
+      "utf8"
+    )
+
+    expect(dialogSource).not.toContain("完成验证后重新登录")
+    expect(dialogSource).toContain("重新登录不会解除")
+    expect(dialogSource).toContain("改用文章链接")
+
+    const rateLimitBranchStart = toastSource.indexOf(
+      ": isWxmpRateLimitError(message)"
+    )
+    const rateLimitBranchEnd = toastSource.indexOf(
+      ': showCopyableToast("error", message, options)',
+      rateLimitBranchStart
+    )
+    const rateLimitBranch = toastSource.slice(
+      rateLimitBranchStart,
+      rateLimitBranchEnd
+    )
+
+    expect(rateLimitBranchStart).toBeGreaterThan(-1)
+    expect(rateLimitBranchEnd).toBeGreaterThan(rateLimitBranchStart)
+    expect(rateLimitBranch).toContain("showCopyableToast")
+    expect(rateLimitBranch).not.toContain("showWxmpRecoveryToast")
+  })
+
+  test("the UI and packaged sidecar preserve the stable-id acquisition split", async () => {
+    const [dialogSource, availabilitySource, sidecarBuildSource] =
+      await Promise.all([
+        readFile(
+          new URL("../src/components/add-account-dialog.tsx", import.meta.url),
+          "utf8"
+        ),
+        readFile(
+          new URL("../src/lib/wxmp-availability.ts", import.meta.url),
+          "utf8"
+        ),
+        readFile(
+          new URL("../scripts/build-wcx-sidecar.sh", import.meta.url),
+          "utf8"
+        ),
+      ])
+
+    expect(availabilitySource).toContain(
+      "searchbiz 只负责把名称解析为稳定 ID（fakeid）"
+    )
+    expect(availabilitySource).toContain("自有号读取后台发表记录")
+    expect(availabilitySource).toContain("外部号从公开索引发现候选")
+    expect(availabilitySource).toContain("用文章内 biz 与该 ID 核验归属")
+    expect(dialogSource).not.toContain("准备按公众号 ID 抓取")
+    expect(sidecarBuildSource).toContain("--hidden-import wcx.public_index")
+  })
 })

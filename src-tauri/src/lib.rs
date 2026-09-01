@@ -432,7 +432,6 @@ pub fn run() {
             commands::feishu_sync_articles,
         ])
         .setup(|app| {
-            commands::prewarm_wechat_search_client();
             commands::prewarm_wcx_daemon();
             setup_tray(app)?;
             Ok(())
