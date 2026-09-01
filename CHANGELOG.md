@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- macOS delta 签名在无密码 updater 私钥下显式传入空密码环境变量，避免非交互 CI 误尝试终端提示后放弃已生成的增量包。
+
 ## 0.3.16 - 2026-09-01
 
 ### Fixed

@@ -32,6 +32,9 @@ describe("release workflow packaging", () => {
       'gh release download "$TAG" --repo "$REPO" --pattern "$current_asset"'
     )
     expect(workflow).toContain(
+      "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
+    )
+    expect(workflow).toContain(
       '"wxmp-cracker-app-${PREVIOUS_TAG#v}-darwin-aarch64.app.tar.gz"'
     )
     expect(workflow).toContain(
