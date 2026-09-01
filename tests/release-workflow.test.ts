@@ -26,6 +26,12 @@ describe("release workflow packaging", () => {
     expect(workflow).toContain('local previous_asset="$2"')
     expect(workflow).toContain('local current_asset="$3"')
     expect(workflow).toContain(
+      'gh release download "$PREVIOUS_TAG" --repo "$REPO" --pattern "$previous_asset"'
+    )
+    expect(workflow).toContain(
+      'gh release download "$TAG" --repo "$REPO" --pattern "$current_asset"'
+    )
+    expect(workflow).toContain(
       '"wxmp-cracker-app-${PREVIOUS_TAG#v}-darwin-aarch64.app.tar.gz"'
     )
     expect(workflow).toContain(
