@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -116,28 +116,17 @@ const WECHAT_DIRECT_SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
 const WECHAT_ARTICLE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const WECHAT_IMAGE_MAX_BYTES: u64 = 12 * 1024 * 1024;
-#[cfg(target_os = "macos")]
-const ACCOUNT_FEED_INITIAL_TIMEOUT: Duration = Duration::from_secs(6);
-#[cfg(target_os = "macos")]
-const ACCOUNT_FEED_PAGE_TIMEOUT: Duration = Duration::from_millis(1_600);
-#[cfg(target_os = "macos")]
-const ACCOUNT_FEED_TOTAL_TIMEOUT: Duration = Duration::from_secs(24);
-#[cfg(target_os = "macos")]
-const ACCOUNT_FEED_MAX_PAGES: usize = 80;
-#[cfg(target_os = "macos")]
-const ACCOUNT_FEED_MAX_STAGNANT_PAGES: usize = 2;
 
 #[derive(Clone)]
 struct ActiveFetchProcess {
     account: AccountSearchResult,
     cancel_requested: Arc<AtomicBool>,
-    pid: Option<u32>,
-    operation_id: u64,
+    pid: u32,
 }
 
 struct ActiveFetchGuard {
     fakeid: String,
-    operation_id: u64,
+    pid: u32,
 }
 
 struct WcxDaemon {
@@ -188,7 +177,6 @@ static ACTIVE_FETCH_PROCESSES: OnceLock<Mutex<HashMap<String, ActiveFetchProcess
     OnceLock::new();
 static WCX_PATH_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static WCX_DAEMON: OnceLock<Mutex<Option<WcxDaemon>>> = OnceLock::new();
-static NEXT_FETCH_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 static WECHAT_SEARCH_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_ARTICLE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 static WECHAT_IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
@@ -200,7 +188,7 @@ impl Drop for ActiveFetchGuard {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if processes
             .get(&self.fakeid)
-            .is_some_and(|active| active.operation_id == self.operation_id)
+            .is_some_and(|active| active.pid == self.pid)
         {
             processes.remove(&self.fakeid);
         }
@@ -1088,27 +1076,6 @@ pub async fn fetch_selected_account(
             ),
         );
 
-        #[cfg(target_os = "macos")]
-        if mode == "forward" && !is_logged_in_account(&account.fakeid) {
-            let result = run_wechat_account_feed_fetch(&app, &account, limit, with_content);
-            if let Err(error) = &result {
-                let cancelled = error.message.contains("已打断");
-                emit_fetch_progress(
-                    &app,
-                    fetch_progress(
-                        &account,
-                        if cancelled { "cancel" } else { "articles" },
-                        if cancelled { "warning" } else { "error" },
-                        &error.message,
-                        None,
-                        Some(limit),
-                        None,
-                    ),
-                );
-            }
-            return result;
-        }
-
         run_wcx_fetch_daemon(
             &app,
             &account,
@@ -1120,485 +1087,8 @@ pub async fn fetch_selected_account(
     })
     .await
     .map_err(|e| CmdError {
-        message: format!("公众号抓取任务失败: {e}"),
+        message: format!("wcx 精确抓取任务失败: {e}"),
     })?
-}
-
-#[cfg(target_os = "macos")]
-fn is_logged_in_account(fakeid: &str) -> bool {
-    auth::read_config()
-        .and_then(|config| config.account)
-        .as_ref()
-        .and_then(login_account_fakeid)
-        .is_some_and(|value| value == fakeid)
-}
-
-#[cfg(target_os = "macos")]
-fn run_wechat_account_feed_fetch(
-    app: &AppHandle,
-    account: &AccountSearchResult,
-    limit: u32,
-    with_content: bool,
-) -> Result<FetchAccountResult, CmdError> {
-    log::info!(
-        "[DEBUG][account_feed_fetch] started fakeid={} limit={} with_content={}",
-        account.fakeid,
-        limit,
-        with_content
-    );
-    let (_active_guard, cancel_requested) = register_active_fetch(account, None);
-    let account_upsert = db::AccountUpsert {
-        fakeid: &account.fakeid,
-        nickname: &account.nickname,
-        alias: account.alias.as_deref(),
-        signature: account.signature.as_deref(),
-        avatar: account.avatar.as_deref(),
-    };
-    db::upsert_account_metadata(&account_upsert).map_err(CmdError::from)?;
-    emit_fetch_progress(
-        app,
-        fetch_progress(
-            account,
-            "account",
-            "done",
-            "已锁定公众号 ID，准备读取该 ID 的文章列表",
-            None,
-            Some(limit),
-            None,
-        ),
-    );
-
-    let started_at = Instant::now();
-    let started_ms = system_time_to_unix_millis(SystemTime::now()).saturating_sub(3_000);
-    let cache_after_ms = started_ms.saturating_sub(5 * 60 * 1_000);
-    let cached_records =
-        crate::wechat_account_feed::read_account_feed_articles(&account.fakeid, cache_after_ms)
-            .map_err(|message| CmdError { message })?;
-    let target_count = usize::try_from(limit).unwrap_or(usize::MAX);
-    let mut records =
-        HashMap::<(String, String), crate::wechat_account_feed::AccountFeedArticleMetrics>::new();
-    merge_account_feed_records(&mut records, cached_records);
-    log::info!(
-        "[DEBUG][account_feed_fetch] recent exact-id cache records={} target={}",
-        records.len(),
-        target_count
-    );
-
-    if records.len() >= target_count {
-        log::info!(
-            "[DEBUG][account_feed_fetch] list source=recent-exact-id-cache records={}",
-            records.len()
-        );
-        emit_fetch_progress(
-            app,
-            fetch_progress(
-                account,
-                "articles",
-                "running",
-                "命中最近 5 分钟内已按公众号 ID 验证的本机微信文章列表",
-                Some(0),
-                Some(limit),
-                None,
-            ),
-        );
-    } else {
-        log::info!(
-            "[DEBUG][account_feed_fetch] list source=wechat-account-feed-navigation cached_records={}",
-            records.len()
-        );
-        emit_fetch_progress(
-            app,
-            fetch_progress(
-                account,
-                "articles",
-                "running",
-                "正在通过本机微信打开公众号主页并核对公众号 ID",
-                Some(records.len().try_into().unwrap_or(u32::MAX)),
-                Some(limit),
-                None,
-            ),
-        );
-        ensure_fetch_not_cancelled(&cancel_requested)?;
-        let navigation_query = account
-            .alias
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&account.nickname);
-        let mut navigation = crate::wechat_automation::open_account_feed_by_identity(
-            navigation_query,
-            &account.fakeid,
-        )
-        .map_err(|message| CmdError { message })?;
-        let traversal_result = (|| -> Result<(), CmdError> {
-            let traversal_deadline = Instant::now() + ACCOUNT_FEED_TOTAL_TIMEOUT;
-            let initial_deadline = Instant::now() + ACCOUNT_FEED_INITIAL_TIMEOUT;
-            let mut fresh_batch_seen = false;
-            while Instant::now() < initial_deadline {
-                ensure_fetch_not_cancelled(&cancel_requested)?;
-                let fresh = crate::wechat_account_feed::read_account_feed_articles(
-                    &account.fakeid,
-                    started_ms,
-                )
-                .map_err(|message| CmdError { message })?;
-                if !fresh.is_empty() {
-                    merge_account_feed_records(&mut records, fresh);
-                    fresh_batch_seen = true;
-                    break;
-                }
-                thread::sleep(Duration::from_millis(80));
-            }
-            if !fresh_batch_seen && records.is_empty() {
-                return Err(CmdError {
-                    message: "已确认目标公众号 ID，但本机微信没有返回该公众号的文章列表数据"
-                        .to_string(),
-                });
-            }
-
-            let mut page_count = 0_usize;
-            let mut stagnant_pages = 0_usize;
-            while records.len() < target_count
-                && page_count < ACCOUNT_FEED_MAX_PAGES
-                && Instant::now() < traversal_deadline
-                && stagnant_pages < ACCOUNT_FEED_MAX_STAGNANT_PAGES
-            {
-                ensure_fetch_not_cancelled(&cancel_requested)?;
-                let count_before = records.len();
-                navigation
-                    .load_next_account_feed_page()
-                    .map_err(|message| CmdError { message })?;
-                page_count += 1;
-                let page_deadline =
-                    (Instant::now() + ACCOUNT_FEED_PAGE_TIMEOUT).min(traversal_deadline);
-                while Instant::now() < page_deadline {
-                    ensure_fetch_not_cancelled(&cancel_requested)?;
-                    let fresh = crate::wechat_account_feed::read_account_feed_articles(
-                        &account.fakeid,
-                        started_ms,
-                    )
-                    .map_err(|message| CmdError { message })?;
-                    merge_account_feed_records(&mut records, fresh);
-                    if records.len() > count_before {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(70));
-                }
-                if records.len() > count_before {
-                    stagnant_pages = 0;
-                } else {
-                    stagnant_pages += 1;
-                }
-                emit_fetch_progress(
-                    app,
-                    fetch_progress(
-                        account,
-                        "articles",
-                        "running",
-                        &format!(
-                            "已按公众号 ID 读取 {} 篇文章列表",
-                            records.len().min(target_count)
-                        ),
-                        Some(
-                            records
-                                .len()
-                                .min(target_count)
-                                .try_into()
-                                .unwrap_or(u32::MAX),
-                        ),
-                        Some(limit),
-                        None,
-                    ),
-                );
-            }
-            Ok(())
-        })();
-        navigation.finish(true);
-        traversal_result?;
-    }
-
-    ensure_fetch_not_cancelled(&cancel_requested)?;
-    let mut records = records.into_values().collect::<Vec<_>>();
-    records.retain(|record| {
-        record.biz == account.fakeid && record.create_time.is_some_and(|timestamp| timestamp > 0)
-    });
-    records.sort_by(|left, right| {
-        right
-            .create_time
-            .cmp(&left.create_time)
-            .then_with(|| right.mid.cmp(&left.mid))
-            .then_with(|| right.idx.cmp(&left.idx))
-    });
-    records.truncate(target_count);
-    if records.is_empty() {
-        return Err(CmdError {
-            message: "已确认公众号 ID，但可验证的文章列表为空".to_string(),
-        });
-    }
-    log::info!(
-        "[DEBUG][account_feed_fetch] verified records={} fakeid={}",
-        records.len(),
-        account.fakeid
-    );
-    // These URLs may contain short-lived WeChat session parameters. Keep
-    // them only for this fetch call; the database receives `record.link`,
-    // which is the token-free canonical URL.
-    let transient_fetch_links = records
-        .iter()
-        .filter_map(|record| {
-            record
-                .transient_fetch_link
-                .as_ref()
-                .map(|link| (format!("{}_{}", record.mid, record.idx), link.clone()))
-        })
-        .collect::<HashMap<_, _>>();
-
-    let existing_aids = db::list_articles(&account.fakeid)
-        .map_err(CmdError::from)?
-        .into_iter()
-        .map(|article| article.aid)
-        .collect::<HashSet<_>>();
-    let mut persisted_aids = Vec::with_capacity(records.len());
-    let mut new_inserts = 0_usize;
-    for (index, record) in records.iter().enumerate() {
-        ensure_fetch_not_cancelled(&cancel_requested)?;
-        let aid = format!("{}_{}", record.mid, record.idx);
-        let create_time = record
-            .create_time
-            .expect("records without create_time were removed");
-        let author = record
-            .publisher
-            .as_deref()
-            .or(Some(account.nickname.as_str()));
-        let article = db::ArticleUpsert {
-            aid: &aid,
-            fakeid: &account.fakeid,
-            title: &record.title,
-            link: &record.link,
-            digest: record.digest.as_deref(),
-            cover: record.cover.as_deref(),
-            author,
-            create_time,
-            update_time: Some(create_time),
-            article_type: None,
-            copyright_type: None,
-            content_html: None,
-            content_md: None,
-        };
-        db::upsert_account_and_article(&account_upsert, &article).map_err(CmdError::from)?;
-        if !existing_aids.contains(&aid) {
-            new_inserts += 1;
-        }
-        persisted_aids.push(aid);
-        emit_fetch_progress(
-            app,
-            fetch_progress(
-                account,
-                "articles",
-                "running",
-                &format!("文章列表已写入 {}/{}", index + 1, records.len()),
-                Some((index + 1).try_into().unwrap_or(u32::MAX)),
-                Some(records.len().try_into().unwrap_or(u32::MAX)),
-                Some(record.title.clone()),
-            ),
-        );
-    }
-    emit_fetch_progress(
-        app,
-        fetch_progress(
-            account,
-            "articles",
-            "done",
-            &format!(
-                "公众号 ID 文章列表完成：读取 {} 篇，新增 {} 篇",
-                records.len(),
-                new_inserts
-            ),
-            Some(records.len().try_into().unwrap_or(u32::MAX)),
-            Some(records.len().try_into().unwrap_or(u32::MAX)),
-            None,
-        ),
-    );
-
-    let mut content_count = 0_usize;
-    let mut content_errors = Vec::new();
-    if with_content {
-        let mut pending = Vec::new();
-        for aid in &persisted_aids {
-            if let Some(article) = db::get_article(aid).map_err(CmdError::from)? {
-                if !has_article_body(&article) {
-                    let fetch_link = transient_fetch_links
-                        .get(aid)
-                        .cloned()
-                        .unwrap_or_else(|| article.link.clone());
-                    pending.push((article, fetch_link));
-                }
-            }
-        }
-        emit_fetch_progress(
-            app,
-            fetch_progress(
-                account,
-                "content",
-                "running",
-                &format!("待抓取正文 {} 篇", pending.len()),
-                Some(0),
-                Some(pending.len().try_into().unwrap_or(u32::MAX)),
-                None,
-            ),
-        );
-        log::info!(
-            "[DEBUG][account_feed_fetch] content candidates={} already_cached={}",
-            pending.len(),
-            records.len().saturating_sub(pending.len())
-        );
-        for (index, (article, fetch_link)) in pending.iter().enumerate() {
-            ensure_fetch_not_cancelled(&cancel_requested)?;
-            emit_fetch_progress(
-                app,
-                fetch_progress(
-                    account,
-                    "content",
-                    "running",
-                    &format!("正在抓取正文 {}/{}", index + 1, pending.len()),
-                    Some(index.try_into().unwrap_or(u32::MAX)),
-                    Some(pending.len().try_into().unwrap_or(u32::MAX)),
-                    Some(article.title.clone()),
-                ),
-            );
-            let item_error = match fetch_single_article_content(fetch_link) {
-                Ok(content) if !content.html.trim().is_empty() || !content.md.trim().is_empty() => {
-                    db::set_article_content(&article.aid, &content.html, &content.md)
-                        .map_err(CmdError::from)?;
-                    content_count += 1;
-                    None
-                }
-                Ok(_) => Some("正文为空".to_string()),
-                Err(error) => Some(error),
-            };
-            if let Some(error) = item_error.as_ref() {
-                content_errors.push(format!("{}：{error}", article.title));
-            }
-            emit_fetch_progress(
-                app,
-                fetch_progress(
-                    account,
-                    "content",
-                    if item_error.is_some() {
-                        "warning"
-                    } else {
-                        "running"
-                    },
-                    &item_error
-                        .map(|error| format!("正文抓取失败：{error}"))
-                        .unwrap_or_else(|| format!("正文已写入 {content_count}/{}", pending.len())),
-                    Some((index + 1).try_into().unwrap_or(u32::MAX)),
-                    Some(pending.len().try_into().unwrap_or(u32::MAX)),
-                    Some(article.title.clone()),
-                ),
-            );
-            if index + 1 < pending.len() {
-                thread::sleep(Duration::from_millis(800));
-            }
-        }
-        emit_fetch_progress(
-            app,
-            fetch_progress(
-                account,
-                "content",
-                if content_errors.is_empty() {
-                    "done"
-                } else {
-                    "warning"
-                },
-                &format!("正文抓取完成 {content_count}/{} 篇", pending.len()),
-                Some(pending.len().try_into().unwrap_or(u32::MAX)),
-                Some(pending.len().try_into().unwrap_or(u32::MAX)),
-                None,
-            ),
-        );
-    }
-
-    emit_fetch_progress(
-        app,
-        fetch_progress(
-            account,
-            "complete",
-            "done",
-            &format!(
-                "已完成：读取 {} 篇，新增 {} 篇，正文 {} 篇",
-                records.len(),
-                new_inserts,
-                content_count
-            ),
-            Some(records.len().try_into().unwrap_or(u32::MAX)),
-            Some(records.len().try_into().unwrap_or(u32::MAX)),
-            None,
-        ),
-    );
-    let summary = serde_json::json!({
-        "fakeid": &account.fakeid,
-        "nickname": &account.nickname,
-        "mode": "forward",
-        "scanned": records.len(),
-        "matched_count": records.len(),
-        "new_inserts": new_inserts,
-        "count": records.len(),
-        "content_count": content_count,
-        "article_index_status": "ready",
-        "article_index_source": "wechat-account-feed",
-        "article_index_notice": null,
-        "elapsed_ms": started_at.elapsed().as_millis(),
-    });
-    log::info!(
-        "[DEBUG][account_feed_fetch] completed fakeid={} records={} new={} content={} content_errors={} elapsed_ms={}",
-        account.fakeid,
-        records.len(),
-        new_inserts,
-        content_count,
-        content_errors.len(),
-        started_at.elapsed().as_millis()
-    );
-    Ok(FetchAccountResult {
-        stdout: format!("{summary}\n"),
-        stderr: content_errors.join("\n"),
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn merge_account_feed_records(
-    records: &mut HashMap<(String, String), crate::wechat_account_feed::AccountFeedArticleMetrics>,
-    candidates: Vec<crate::wechat_account_feed::AccountFeedArticleMetrics>,
-) {
-    for candidate in candidates {
-        let key = (candidate.mid.clone(), candidate.idx.clone());
-        match records.get_mut(&key) {
-            Some(existing) if existing.update_time_ms >= candidate.update_time_ms => {}
-            Some(existing) => *existing = candidate,
-            None => {
-                records.insert(key, candidate);
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_fetch_not_cancelled(cancel_requested: &AtomicBool) -> Result<(), CmdError> {
-    if cancel_requested.load(Ordering::SeqCst) {
-        Err(CmdError {
-            message: "当前抓取任务已打断".to_string(),
-        })
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn system_time_to_unix_millis(value: SystemTime) -> i64 {
-    value
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1635,13 +1125,11 @@ pub fn cancel_fetch_account(app: AppHandle, fakeid: String) -> Result<bool, CmdE
         ),
     );
 
-    if let Some(pid) = active.pid {
-        if let Err(message) = terminate_process(pid) {
-            active.cancel_requested.store(false, Ordering::SeqCst);
-            return Err(CmdError {
-                message: format!("打断 wcx 抓取失败: {message}"),
-            });
-        }
+    if let Err(message) = terminate_process(active.pid) {
+        active.cancel_requested.store(false, Ordering::SeqCst);
+        return Err(CmdError {
+            message: format!("打断 wcx 抓取失败: {message}"),
+        });
     }
 
     Ok(true)
@@ -2468,7 +1956,7 @@ fn fetch_single_article_content(link: &str) -> Result<ArticleContentPayload, Str
         serde_json::json!({"link": link}),
         None,
     )
-    .map_err(|error| redact_wechat_session_parameters(&error.message))?;
+    .map_err(|error| error.message)?;
     let payload = output
         .stdout
         .lines()
@@ -2479,17 +1967,6 @@ fn fetch_single_article_content(link: &str) -> Result<ArticleContentPayload, Str
 
     serde_json::from_str::<ArticleContentPayload>(payload)
         .map_err(|e| format!("解析 wcx 文章抓取结果失败: {e}"))
-}
-
-fn redact_wechat_session_parameters(message: &str) -> String {
-    static SESSION_PARAMETER: OnceLock<Regex> = OnceLock::new();
-    SESSION_PARAMETER
-        .get_or_init(|| {
-            Regex::new(r#"(?i)\b(key|pass_ticket|uin|wxtoken|appmsg_token)=([^&\s\"']+)"#)
-                .expect("valid WeChat session parameter regex")
-        })
-        .replace_all(message, "$1=[redacted]")
-        .into_owned()
 }
 
 fn fallback_fetch_account(article: &ArticleDetail) -> Result<AccountSearchResult, CmdError> {
@@ -2667,8 +2144,8 @@ fn run_wcx_daemon_request(
             message: format!("发送 wcx 常驻抓取请求失败: {error}"),
         })?;
 
-    let active_fetch = progress_context
-        .map(|(_, account)| register_active_fetch(account, Some(daemon.child.id())));
+    let active_fetch =
+        progress_context.map(|(_, account)| register_active_fetch(account, daemon.child.id()));
     let mut stdout_text = String::new();
     let mut last_progress: Option<FetchAccountProgress> = None;
     loop {
@@ -2777,15 +2254,13 @@ fn active_fetch_processes() -> &'static Mutex<HashMap<String, ActiveFetchProcess
 
 fn register_active_fetch(
     account: &AccountSearchResult,
-    pid: Option<u32>,
+    pid: u32,
 ) -> (ActiveFetchGuard, Arc<AtomicBool>) {
-    let operation_id = NEXT_FETCH_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
     let cancel_requested = Arc::new(AtomicBool::new(false));
     let active = ActiveFetchProcess {
         account: account.clone(),
         cancel_requested: Arc::clone(&cancel_requested),
         pid,
-        operation_id,
     };
 
     let mut processes = active_fetch_processes()
@@ -2796,7 +2271,7 @@ fn register_active_fetch(
     (
         ActiveFetchGuard {
             fakeid: account.fakeid.clone(),
-            operation_id,
+            pid,
         },
         cancel_requested,
     )
@@ -3224,21 +2699,6 @@ mod tests {
             login_account_fakeid(&account).as_deref(),
             Some("Mzg2OTg5NDg3Mg==")
         );
-    }
-
-    #[test]
-    fn article_fetch_errors_redact_transient_wechat_session_parameters() {
-        let message = redact_wechat_session_parameters(
-            "request failed: https://mp.weixin.qq.com/s?key=secret&pass_ticket=ticket&uin=123&wxtoken=456&appmsg_token=token",
-        );
-
-        assert!(!message.contains("secret"));
-        assert!(!message.contains("pass_ticket=ticket"));
-        assert!(!message.contains("uin=123"));
-        assert!(!message.contains("wxtoken=456"));
-        assert!(!message.contains("appmsg_token=token"));
-        assert!(message.contains("key=[redacted]"));
-        assert!(message.contains("pass_ticket=[redacted]"));
     }
 
     #[test]
