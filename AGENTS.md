@@ -24,3 +24,8 @@ Reference complete design guide: file:///Users/mark/lovstudio/design/design-guid
 - 主按钮: `bg-primary text-primary-foreground hover:bg-primary/90`
 - 卡片: `bg-card border border-border rounded-xl`
 - 标题: `font-serif text-foreground`
+
+## 跨会话约定
+
+- 用户可见文案不得出现接口名、内部 ID、错误码、配额公式与调度术语；tests/article-fetch-flow.test.ts 以反向断言守护该文案，改文案时同步测试而非放松断言（2026-09-03, 66e2a02）
+- zsh 下 `for f in $(rg -l ...)` 不做分词，批量改多文件必须用 `rg -l | while read -r f` 管道（2026-09-03, 66e2a02）
