@@ -30,7 +30,7 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <channel>
   <title>微信公众号归档</title>
   <link>https://example.github.io</link>
-  <description>由 wxmp-cracker 自动同步</description>
+  <description>由微探自动同步</description>
   <language>zh-CN</language>
   ${items
     .map(

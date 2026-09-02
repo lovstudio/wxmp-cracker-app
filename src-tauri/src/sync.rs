@@ -744,7 +744,7 @@ fn ensure_readme(repo_dir: &Path, index: &IndexFile) -> Result<()> {
     let path = repo_dir.join("README.md");
     let body = format!(
         "# 微信公众号归档\n\n\
-         由 [wxmp-cracker](https://github.com/markshawn2020/wxmp-cracker-app) 自动同步。\n\n\
+         由 [微探](https://wxmp.lovstudio.ai) 自动同步。\n\n\
          - 公众号数: **{}**\n\
          - 文章数: **{}**\n\
          - 最近同步: {}\n\n\

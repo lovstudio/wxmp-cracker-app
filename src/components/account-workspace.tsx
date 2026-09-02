@@ -226,7 +226,7 @@ function ArticleManager({
     if (collectionBusy) return
 
     setFetchingAid(article.aid)
-    toast.info(article.has_content ? "正在重新抓取正文" : "正在抓取正文")
+    toast.info(article.has_content ? "正在重新采集正文" : "正在采集正文")
     try {
       const updated = await runWithProviderExecutionReport(
         {
@@ -249,7 +249,7 @@ function ArticleManager({
       )
       onContentFetched?.(updated.aid)
       toast.success(
-        article.has_content ? "正文已重新抓取" : "正文已抓取并写入缓存"
+        article.has_content ? "正文已重新采集" : "正文已采集"
       )
     } catch (error) {
       toast.wxmpError(errorMessage(error), api.openLogin)
@@ -334,7 +334,7 @@ function ArticleManager({
           label="当前结果"
           value={filteredArticles.length.toLocaleString()}
         />
-        <Metric label="正文已抓取" value={cachedCount.toLocaleString()} />
+        <Metric label="正文已采集" value={cachedCount.toLocaleString()} />
       </div>
       <div className="workspace-panel overflow-hidden">
         <div className="space-y-3 border-b border-border/70 px-4 py-3">
@@ -484,8 +484,8 @@ function ArticleManager({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部正文</SelectItem>
-                <SelectItem value="cached">已抓取</SelectItem>
-                <SelectItem value="missing">未抓取</SelectItem>
+                <SelectItem value="cached">已采集</SelectItem>
+                <SelectItem value="missing">未采集</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -798,10 +798,10 @@ function ArticleManager({
                           {rowSyncing
                             ? "续采中"
                             : rowFetching
-                              ? "抓取中"
+                              ? "采集中"
                               : article.has_content
-                                ? "重抓"
-                                : "抓取"}
+                                ? "重新采集"
+                                : "采集"}
                         </Button>
                         <Button
                           type="button"
@@ -1260,10 +1260,10 @@ function ArticleStatusBadge({
 }
 
 function articleStatusLabel(state: ArticleStatusState): string {
-  if (state === "fetching") return "抓取中"
+  if (state === "fetching") return "采集中"
   if (state === "syncing") return "续采中"
-  if (state === "cached") return "正文已抓取"
-  return "正文未抓取"
+  if (state === "cached") return "正文已采集"
+  return "正文未采集"
 }
 
 function useAccountArticles(

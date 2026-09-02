@@ -1,6 +1,6 @@
 # 微信公众号归档站点
 
-这个目录是 [wxmp-cracker](https://github.com/markshawn2020/wxmp-cracker-app) 自动同步的内容仓库,
+这个目录是 [微探](https://wxmp.lovstudio.ai) 自动同步的内容仓库,
 附带一个开箱即用的 Astro 静态站点 + Pagefind 全文检索 + RSS。
 
 ## 启用步骤
@@ -28,5 +28,5 @@
 ## 关键约定
 
 - `accounts/<昵称>/articles/<日期>-<标题>-<hash>.md` 是文章主体,顶部带 YAML frontmatter。
-- `index.json` 由 wxmp-cracker 维护,**不要手动改**,会被下次同步覆盖。
+- `index.json` 由微探维护,**不要手动改**,会被下次同步覆盖。
 - 图片仅在配置 `sync_images=true` 时下载;否则保留原始 mmbiz.qpic.cn URL(可能失效)。

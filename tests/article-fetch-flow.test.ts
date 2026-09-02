@@ -19,7 +19,7 @@ describe("article fetch authentication flow", () => {
     expect(progress.stage).toBe("prepare")
     expect(progress.status).toBe("done")
     expect(progress.message).toContain("已确认目标：手工川")
-    expect(progress.message).toContain(account.fakeid)
+    expect(progress.message).not.toContain(account.fakeid)
 
     const contentProgress = initialResumeProgress(account, 179, "content")
     expect(contentProgress.status).toBe("done")
@@ -31,7 +31,7 @@ describe("article fetch authentication flow", () => {
       "classify"
     )
     expect(classificationProgress.status).toBe("done")
-    expect(classificationProgress.message).toContain("回填 226 篇旧文章分类")
+    expect(classificationProgress.message).toContain("补全 226 篇文章分类")
   })
 
   test("login is gated before progress and the dialog is the only status surface", async () => {
@@ -75,7 +75,7 @@ describe("article fetch authentication flow", () => {
     )
 
     expect(dialogSource).not.toContain("完成验证后重新登录")
-    expect(dialogSource).toContain("重新登录不会解除")
+    expect(dialogSource).toContain("重新登录不会改变它")
     expect(dialogSource).toContain("改用文章链接")
 
     const rateLimitBranchStart = toastSource.indexOf(
@@ -96,7 +96,7 @@ describe("article fetch authentication flow", () => {
     expect(rateLimitBranch).not.toContain("showWxmpRecoveryToast")
   })
 
-  test("the UI and packaged sidecar preserve the stable-id acquisition split", async () => {
+  test("the packaged sidecar preserves the stable-id acquisition split without leaking it in UI copy", async () => {
     const [dialogSource, availabilitySource, sidecarBuildSource] =
       await Promise.all([
         readFile(
@@ -113,13 +113,15 @@ describe("article fetch authentication flow", () => {
         ),
       ])
 
-    expect(availabilitySource).toContain(
-      "searchbiz 只负责把名称解析为稳定 ID（fakeid）"
-    )
-    expect(availabilitySource).toContain("自有号读取后台发表记录")
-    expect(availabilitySource).toContain("外部号从公开索引发现候选")
-    expect(availabilitySource).toContain("用文章内 biz 与该 ID 核验归属")
+    // User-facing copy must stay audience-side: no endpoint names, internal
+    // ids, or anti-rate-limit wording.
+    expect(availabilitySource).toContain("逐篇采集")
+    expect(availabilitySource).not.toContain("searchbiz")
+    expect(availabilitySource).not.toContain("fakeid")
+    expect(availabilitySource).not.toContain("biz")
+    expect(availabilitySource).not.toContain("随机错峰")
     expect(dialogSource).not.toContain("准备按公众号 ID 抓取")
+    // The acquisition split itself is a packaging invariant, not UI copy.
     expect(sidecarBuildSource).toContain("--hidden-import wcx.public_index")
   })
 })

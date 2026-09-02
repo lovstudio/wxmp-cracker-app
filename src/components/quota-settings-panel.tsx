@@ -114,7 +114,7 @@ export function QuotaSettingsPanel() {
                 value={entitlement ? `L${entitlement.account_level}` : "-"}
                 detail={
                   entitlement
-                    ? `当前账号等级为 L${entitlement.account_level}；未授权账号按服务端默认等级计算。`
+                    ? `当前账号等级为 L${entitlement.account_level}，等级越高每小时可用频率越高。`
                     : "正在读取授权等级。"
                 }
               />
@@ -123,19 +123,19 @@ export function QuotaSettingsPanel() {
                 value={quotaBreakdown?.theoreticalAllowance ?? "-"}
                 detail={
                   entitlement && quotaBreakdown
-                    ? `L${entitlement.account_level} × ${entitlement.account_level_factor} + ${entitlement.own_capability_units} × ${entitlement.own_capability_factor} = ${quotaBreakdown.theoreticalAllowance} 次/小时`
+                    ? `根据账号等级计算的每小时频率上限：${quotaBreakdown.theoreticalAllowance} 次/小时。`
                     : "正在计算理论频率额度。"
                 }
               />
               <QuotaMetric
-                label="执行池"
+                label="可用上限"
                 value={quotaBreakdown?.executablePool ?? "-"}
                 detail={
                   quotaBreakdown &&
                   quotaBreakdown.executablePool !== null &&
                   gatewayOverview
-                    ? `自用节点剩余 ${gatewayOverview.self_remaining_capacity} + 外部商业化池 ${gatewayOverview.commercial_pool_hourly_capacity} = ${quotaBreakdown.executablePool} 次/小时`
-                    : "正在计算当前可执行资源池。"
+                    ? `综合当前可用资源后的每小时上限：${quotaBreakdown.executablePool} 次/小时。`
+                    : "正在计算可用上限。"
                 }
               />
               <QuotaMetric
@@ -143,7 +143,7 @@ export function QuotaSettingsPanel() {
                 value={quotaBreakdown?.effectiveAllowance ?? "-"}
                 detail={
                   quotaBreakdown
-                    ? `min(理论额度 ${quotaBreakdown.theoreticalAllowance}, 执行池 ${quotaBreakdown.executablePool ?? quotaBreakdown.theoreticalAllowance}) = ${quotaBreakdown.effectiveAllowance} 次/小时`
+                    ? `当前每小时实际可用的采集次数：${quotaBreakdown.effectiveAllowance} 次/小时。`
                     : "正在汇总可用频率。"
                 }
               />
@@ -166,43 +166,43 @@ export function QuotaSettingsPanel() {
           <section className="min-w-0 rounded-xl border border-border bg-background/80 p-4">
             <div className="mb-3 flex min-w-0 items-center gap-2">
               <NetworkIcon className="size-4 text-primary" />
-              <div className="text-sm font-semibold">能力网关</div>
+              <div className="text-sm font-semibold">资源概览</div>
             </div>
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
               <QuotaMetric
-                label="当前节点"
+                label="当前账号"
                 value={providerStatusLabel(gatewayOverview?.provider_status)}
                 detail={
                   gatewayOverview
-                    ? `当前公众号节点状态为 ${providerStatusLabel(gatewayOverview.provider_status)}；自用 ${gatewayOverview.self_use_enabled ? "已启用" : "未启用"}，商业化 ${gatewayOverview.commercial_enabled ? "已授权" : "未授权"}。`
-                    : "正在读取当前公众号节点。"
+                    ? `当前公众号账号状态为 ${providerStatusLabel(gatewayOverview.provider_status)}；自用 ${gatewayOverview.self_use_enabled ? "已启用" : "未启用"}，商业化 ${gatewayOverview.commercial_enabled ? "已授权" : "未授权"}。`
+                    : "正在读取当前账号。"
                 }
               />
               <QuotaMetric
-                label="健康分"
+                label="稳定性"
                 value={gatewayOverview?.provider_health_score ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `当前节点健康分 ${gatewayOverview.provider_health_score}/100；系统会结合失败率、限频、冷却与最近心跳调整。`
-                    : "正在读取健康分。"
+                    ? `当前账号稳定性评分 ${gatewayOverview.provider_health_score}/100，综合近期运行状况给出。`
+                    : "正在读取稳定性评分。"
                 }
               />
               <QuotaMetric
-                label="池节点"
+                label="共享账号"
                 value={gatewayOverview?.commercial_pool_nodes ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `外部商业化支持池中当前可调度公众号节点数为 ${gatewayOverview.commercial_pool_nodes}。`
-                    : "正在统计外部商业化支持池。"
+                    ? `当前参与共享支持的账号数：${gatewayOverview.commercial_pool_nodes}。`
+                    : "正在统计共享账号。"
                 }
               />
               <QuotaMetric
-                label="外部池剩余"
+                label="共享剩余"
                 value={gatewayOverview?.commercial_pool_hourly_capacity ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `外部在线或降级且未冷却的商业化节点剩余额度求和：${gatewayOverview.commercial_pool_hourly_capacity} 次/小时。`
-                    : "正在计算外部商业化池剩余能力。"
+                    ? `共享支持当前每小时可用的剩余频率：${gatewayOverview.commercial_pool_hourly_capacity} 次/小时。`
+                    : "正在计算共享剩余。"
                 }
               />
               <QuotaMetric
@@ -210,8 +210,8 @@ export function QuotaSettingsPanel() {
                 value={gatewayOverview?.self_remaining_capacity ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `当前自用公众号节点本小时剩余 ${gatewayOverview.self_remaining_capacity} 次；理论自用额度为 ${gatewayOverview.self_hourly_quota} 次/小时。`
-                    : "正在计算自用节点剩余能力。"
+                    ? `当前账号本小时剩余 ${gatewayOverview.self_remaining_capacity} 次；每小时额度 ${gatewayOverview.self_hourly_quota} 次。`
+                    : "正在计算自用剩余。"
                 }
               />
               <QuotaMetric
@@ -219,7 +219,7 @@ export function QuotaSettingsPanel() {
                 value={gatewayOverview?.commercial_capability_units ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `当前公众号对外可贡献 ${gatewayOverview.commercial_capability_units} 个商业化能力单元；是否实际被调度还取决于健康分、冷却与剩余容量。`
+                    ? `当前账号可对外提供的能力单元：${gatewayOverview.commercial_capability_units} 个。`
                     : "正在读取商业化能力单元。"
                 }
               />
@@ -232,7 +232,7 @@ export function QuotaSettingsPanel() {
                 }
                 detail={
                   gatewayOverview
-                    ? `当前账号发起的网关请求：排队 ${gatewayOverview.queued_requests}，执行中 ${gatewayOverview.running_requests}。`
+                    ? `当前账号的请求：排队 ${gatewayOverview.queued_requests}，进行中 ${gatewayOverview.running_requests}。`
                     : "正在读取请求队列。"
                 }
               />
@@ -241,8 +241,8 @@ export function QuotaSettingsPanel() {
                 value={gatewayOverview?.open_alerts ?? "-"}
                 detail={
                   gatewayOverview
-                    ? `当前账号未关闭预警 ${gatewayOverview.open_alerts} 条；最近健康事件：${formatEventTime(gatewayOverview.last_health_event_at)}。`
-                    : "正在读取预警状态。"
+                    ? `当前账号未处理提醒 ${gatewayOverview.open_alerts} 条；最近更新：${formatEventTime(gatewayOverview.last_health_event_at)}。`
+                    : "正在读取提醒状态。"
                 }
               />
             </div>
@@ -251,7 +251,7 @@ export function QuotaSettingsPanel() {
             <div className="mb-3 grid min-w-0 gap-1">
               <div className="text-sm font-semibold">关联能力设置</div>
               <p className="text-xs leading-5 text-muted-foreground">
-                自用优先决定当前公众号是否计入你的自有能力；商业化授权只决定剩余能力是否可对外调度。
+                自用优先：让这个公众号计入你的可用能力。商业化授权：允许闲置能力对外提供。
               </p>
             </div>
             <div className="grid gap-3">
@@ -297,9 +297,9 @@ function QuotaMetric({
 
 function providerStatusLabel(status?: string | null) {
   if (status === "online") return "在线"
-  if (status === "degraded") return "降级"
+  if (status === "degraded") return "受限"
   if (status === "paused") return "暂停"
-  if (status === "cooldown") return "冷却"
+  if (status === "cooldown") return "暂歇"
   if (status === "offline") return "未接入"
   return "-"
 }

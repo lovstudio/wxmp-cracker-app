@@ -270,7 +270,7 @@ export function articleTableCellValue(
   }
   if (column === "create_time") return String(article.create_time)
   if (column === "content_status") {
-    return article.has_content ? "正文已抓取" : "正文未抓取"
+    return article.has_content ? "正文已采集" : "正文未采集"
   }
   if (column === "article_type") return articleTypeLabel(article.article_type)
   if (column === "copyright") return copyrightLabel(article.copyright_type)

@@ -147,7 +147,7 @@ export function WechatCommercialSupportPanel() {
               </span>
             </div>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              将当前已扫码公众号的剩余接口能力，对外作为数据支持服务的一部分参与调度。商业化授权与自用优先相互独立，只按服务端计算后的可用剩余能力参与他用。
+              在你已扫码登录的公众号有闲置能力时，将其对外提供，作为数据支持服务的一部分。商业化授权与自用优先相互独立，只有系统评估后的闲置能力才会对外提供。
             </p>
           </div>
         </div>
@@ -157,17 +157,17 @@ export function WechatCommercialSupportPanel() {
         <CommercialMechanismCard
           icon={<FileCheck2Icon className="size-4" />}
           title="先签署约定"
-          body="授权范围、收益结算、数据边界与退出规则都写入额外商业条款；未完成签约时不应进入对外调度。"
+          body="授权范围、收益结算、数据边界与退出规则都写入额外商业条款；未完成签约前不会对外提供。"
         />
         <CommercialMechanismCard
           icon={<ShieldCheckIcon className="size-4" />}
-          title="只调度剩余能力"
-          body="平台根据账号状态、接口频率与当前使用量计算可供服务的剩余能力，不要求开启自用优先。"
+          title="只提供闲置能力"
+          body="平台会根据账号的当前使用情况评估可对外提供的闲置能力，不要求开启自用优先。"
         />
         <CommercialMechanismCard
           icon={<RefreshCwIcon className="size-4" />}
           title="关闭后停止新增"
-          body="关闭授权后不再接受新的商业化调度；已发生的支持记录、结算与争议处理按已签署条款执行。"
+          body="关闭授权后不再对外提供新的能力；已发生的支持记录、结算与争议处理按已签署条款执行。"
         />
       </section>
 
@@ -290,9 +290,9 @@ function quotaCommercialHint(settings: WechatCapabilitySettings) {
     return "扫码登录并同步账号信息后可授权。"
   }
   if (settings.providesToOthers) {
-    return "已允许剩余能力参与他用；不增加上方自用频率。"
+    return "已允许闲置能力对外提供；不增加上方自用频率。"
   }
-  return "关闭时不对外调度；不影响上方自用频率。"
+  return "关闭时不对外提供；不影响上方自用频率。"
 }
 
 function commercialSupportHint(settings: WechatCapabilitySettings) {
@@ -303,7 +303,7 @@ function commercialSupportHint(settings: WechatCapabilitySettings) {
   if (settings.providesToOthers) {
     return "当前公众号已参与商业化数据支持。"
   }
-  return "勾选后进入商业化支持池，不会改变自用优先设置。"
+  return "勾选后开始对外提供闲置能力，不会改变自用优先设置。"
 }
 
 function useWechatCapabilitySettings() {

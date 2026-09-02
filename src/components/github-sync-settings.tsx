@@ -246,7 +246,7 @@ export function GithubSyncSettings() {
       <header className="space-y-1">
         <h2 className="font-serif text-2xl text-foreground">GitHub 归档</h2>
         <p className="text-sm text-muted-foreground">
-          把抓取到的公众号文章自动同步到你自己的 GitHub 仓库,作为永久归档,并支持
+          把采集到的公众号文章自动同步到你自己的 GitHub 仓库,作为永久归档,并支持
           GitHub Actions 生成静态站点。
         </p>
       </header>
@@ -403,9 +403,9 @@ export function GithubSyncSettings() {
             </div>
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <Label className="text-sm">抓取完成自动推送</Label>
+                <Label className="text-sm">采集完成自动推送</Label>
                 <div className="text-xs text-muted-foreground">
-                  每次抓取任务结束后自动增量同步到 GitHub。
+                  每次采集任务结束后自动增量同步到 GitHub。
                 </div>
               </div>
               <Switch

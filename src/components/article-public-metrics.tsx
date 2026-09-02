@@ -78,8 +78,8 @@ export function ArticlePublicMetrics({ aid }: { aid: string }) {
             : result.source_kind === "wechat_account_feed"
               ? "已从公众号文章列表批量更新互动数据"
               : result.source_kind === "wechat_local_session"
-                ? "已通过本机微信接口保存互动数据快照"
-                : "已保存本机微信互动数据快照"
+                ? "已保存互动数据快照"
+                : "已保存互动数据快照"
         )
       } else if (result.status === "blocked") {
         toast.warning("微信要求访问验证，本次快照未取得互动数值")

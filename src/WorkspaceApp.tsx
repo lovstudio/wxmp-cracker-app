@@ -257,7 +257,7 @@ function WorkspaceApp() {
                 if (s.message) {
                   toast.warning(s.message)
                 } else {
-                  toast.success("微信公众号 Session 有效")
+                  toast.success("微信公众号登录状态有效")
                 }
               }
             }
@@ -957,7 +957,7 @@ function errorMessage(error: unknown): string {
     message.includes("Command auth_logout not found") ||
     message.includes("Command import_article_link not found")
   ) {
-    return "授权命令未加载。请完全退出当前 Tauri 应用后重新启动，Rust 后端会重新编译并注册授权命令。"
+    return "授权服务尚未就绪。请完全退出应用后重新启动；若仍未恢复，请联系客服。"
   }
 
   return message
@@ -990,8 +990,8 @@ function initialFetchProgress(
     stage: "prepare",
     status: "running",
     message: withContent
-      ? `准备抓取 ${limit} 篇文章索引，并同步正文`
-      : `准备抓取 ${limit} 篇文章索引`,
+      ? `准备采集 ${limit} 篇文章索引，并同步正文`
+      : `准备采集 ${limit} 篇文章索引`,
     current: 0,
     total: limit,
     title: null,

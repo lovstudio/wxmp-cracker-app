@@ -358,19 +358,19 @@ function ResourceConditions() {
             : providerLabel
   const quotaDetail =
     entitlement && gatewayOverview
-      ? `有效可用频率 = min(理论额度 ${gatewayOverview.theoretical_hourly_quota}, 可执行池 ${gatewayOverview.executable_pool_hourly_capacity}) = ${gatewayOverview.effective_hourly_quota} 次/小时。`
+      ? `当前每小时实际可用的采集次数：${gatewayOverview.effective_hourly_quota} 次/小时。`
       : entitlement
-        ? `理论额度：L${entitlement.account_level} × ${entitlement.account_level_factor} + ${entitlement.own_capability_units} × ${entitlement.own_capability_factor} = ${entitlement.hourly_quota} 次/小时。`
+        ? `根据账号等级计算的每小时上限：${entitlement.hourly_quota} 次/小时。`
         : (error ?? "正在读取当前可用频率。")
   const providerDetail = gatewayOverview
-    ? `当前公众号节点：${providerLabel}；健康分 ${gatewayOverview.provider_health_score}/100。`
-    : (error ?? "正在读取当前节点状态。")
+    ? `当前公众号账号：${providerLabel}；稳定性 ${gatewayOverview.provider_health_score}/100。`
+    : (error ?? "正在读取当前账号状态。")
   const poolDetail = gatewayOverview
-    ? `当前账号可执行池 = 自用节点剩余 ${gatewayOverview.self_remaining_capacity} + 外部商业化池 ${gatewayOverview.commercial_pool_hourly_capacity} = ${gatewayOverview.executable_pool_hourly_capacity} 次/小时。`
-    : (error ?? "正在读取可执行资源池。")
+    ? `综合当前可用资源后的每小时上限：${gatewayOverview.executable_pool_hourly_capacity} 次/小时。`
+    : (error ?? "正在计算可用上限。")
   const queueDetail = gatewayOverview
-    ? `当前账号请求排队 ${gatewayOverview.queued_requests}，运行中 ${gatewayOverview.running_requests}，未关闭预警 ${openAlerts}。`
-    : (error ?? "正在读取队列和预警。")
+    ? `当前账号请求排队 ${gatewayOverview.queued_requests}，进行中 ${gatewayOverview.running_requests}，未处理提醒 ${openAlerts}。`
+    : (error ?? "正在读取请求状态。")
 
   return (
     <Tooltip>
@@ -400,7 +400,7 @@ function ResourceConditions() {
       >
         <div className="font-heading text-sm font-semibold">运行资源</div>
         <div className="mt-1 text-[11px] text-background/70">
-          当前账号的执行能力与请求负载
+          当前账号的可用频率与请求情况
         </div>
         <div className="mt-3 grid gap-2.5">
           <ResourceDetail
@@ -411,13 +411,13 @@ function ResourceConditions() {
           />
           <ResourceDetail
             icon={NetworkIcon}
-            label="公众号节点"
+            label="公众号账号"
             value={providerLabel}
             detail={providerDetail}
           />
           <ResourceDetail
             icon={ActivityIcon}
-            label="执行池"
+            label="可用上限"
             value={
               gatewayOverview
                 ? `${gatewayOverview.executable_pool_hourly_capacity.toLocaleString()}/h`
@@ -470,9 +470,9 @@ function ResourceDetail({
 
 function providerStatusLabel(status?: string | null) {
   if (status === "online") return "在线"
-  if (status === "degraded") return "降级"
+  if (status === "degraded") return "受限"
   if (status === "paused") return "暂停"
-  if (status === "cooldown") return "冷却"
+  if (status === "cooldown") return "暂歇"
   if (status === "offline") return "离线"
   return "-"
 }

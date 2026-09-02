@@ -211,7 +211,7 @@ export function ArticleDetail({
     if (!detail || fetchingContent) return
 
     setFetchingContent(true)
-    toast.info("正在抓取正文，可能需要一点时间")
+    toast.info("正在采集正文，可能需要一点时间")
     try {
       const updated = await runWithProviderExecutionReport(
         {
@@ -227,7 +227,7 @@ export function ArticleDetail({
       )
       setDetail(updated)
       onContentFetched?.(updated.aid)
-      toast.success("正文已抓取并写入本地缓存")
+      toast.success("正文已采集并写入本地缓存")
     } catch (e) {
       toast.wxmpError(errorMessage(e), api.openLogin)
     } finally {
@@ -299,7 +299,7 @@ export function ArticleDetail({
   // export the whole account first.
   const ensureContent = () => {
     if (!detail.has_content) {
-      toast.warning("该文章尚未抓取正文，请先抓取正文")
+      toast.warning("该文章尚未采集正文，请先采集正文")
       return false
     }
     return true
@@ -391,7 +391,7 @@ export function ArticleDetail({
                     <FileX2Icon className="size-3.5" />
                   )}
                   {fetchingContent
-                    ? "正在抓取正文"
+                    ? "正在采集正文"
                     : detail.has_content
                       ? "正文已缓存"
                       : "仅索引"}
@@ -685,9 +685,9 @@ function ArticleBody({
     <div className="flex min-h-[420px] items-center justify-center p-8">
       <div className="empty-state-panel max-w-md rounded-lg px-8 py-10 text-center">
         <FileX2Icon className="mx-auto mb-3 size-8 text-muted-foreground" />
-        <div className="text-sm font-medium">本篇正文未抓取</div>
+        <div className="text-sm font-medium">本篇正文未采集</div>
         <div className="mx-auto mt-1 max-w-72 text-xs leading-relaxed text-muted-foreground">
-          将从当前文章链接补抓正文，并写入 wcx 本地缓存。
+          将从当前文章链接补采集正文，并写入 wcx 本地缓存。
         </div>
         <Button
           className="mt-5"
@@ -699,7 +699,7 @@ function ArticleBody({
           ) : (
             <DownloadIcon className="size-4" />
           )}
-          {fetchingContent ? "正在抓取正文" : "抓取正文"}
+          {fetchingContent ? "正在采集正文" : "采集正文"}
         </Button>
       </div>
     </div>

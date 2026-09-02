@@ -45,7 +45,7 @@ describe("article table export", () => {
     expect(csv).toContain('"标题 article-1"')
     expect(csv).toContain('"产品、待研究"')
     expect(csv).toContain('"带有""引号"",逗号和\n换行的摘要 article-1"')
-    expect(csv).toContain('"正文已抓取"')
+    expect(csv).toContain('"正文已采集"')
     expect(csv).toContain('"https://mp.weixin.qq.com/s/article-1"')
     expect(csv).toContain('"/Users/example/archive/article-1.md"')
     expect(csv.endsWith("\r\n")).toBe(true)

@@ -275,7 +275,7 @@ export function IntegrationSettings({ accounts }: Props) {
                 </span>
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                将指定公众号中已抓取正文的文章增量写入你授权给应用的知识库。
+                将指定公众号中已采集正文的文章增量写入你授权给应用的知识库。
               </p>
             </div>
           </div>
@@ -520,7 +520,7 @@ export function IntegrationSettings({ accounts }: Props) {
             <div className="mt-4 grid gap-2">
               {accounts.length === 0 ? (
                 <div className="rounded-lg bg-muted/55 px-3 py-4 text-center text-xs text-muted-foreground">
-                  尚未抓取公众号，请先添加公众号后再配置同步范围。
+                  尚未采集公众号，请先添加公众号后再配置同步范围。
                 </div>
               ) : (
                 accounts.map((account) => {
@@ -550,7 +550,7 @@ export function IntegrationSettings({ accounts }: Props) {
                           {account.nickname}
                         </span>
                         <span className="block truncate text-xs text-muted-foreground">
-                          已抓取 {account.article_count} 篇
+                          已采集 {account.article_count} 篇
                         </span>
                       </span>
                     </label>
@@ -584,7 +584,7 @@ export function IntegrationSettings({ accounts }: Props) {
               </div>
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <Label htmlFor="feishu-auto-sync">抓取完成后自动同步</Label>
+                  <Label htmlFor="feishu-auto-sync">采集完成后自动同步</Label>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     新增文章或补齐正文后，仅同步发生变化的文章。
                   </p>

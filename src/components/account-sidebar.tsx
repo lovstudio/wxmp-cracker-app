@@ -953,7 +953,7 @@ function AppSettingsWindow({
                         <div className="min-w-0">
                           <div className="font-semibold">登录已过期</div>
                           <div className="mt-0.5 text-xs">
-                            重新扫码后可继续抓取公众号内容。
+                            重新扫码后可继续采集公众号内容。
                           </div>
                         </div>
                         <Button

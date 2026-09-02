@@ -242,7 +242,7 @@ function AddAccountDialogContent({
               {mode === "account"
                 ? step === "search"
                   ? "1 / 2 搜索公众号"
-                  : "2 / 2 抓取文章"
+                  : "2 / 2 采集文章"
                 : "文章链接"}
             </div>
           </div>
@@ -364,7 +364,7 @@ function AddAccountDialogContent({
 
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
               <div className="space-y-2">
-                <Label htmlFor="track-limit">抓取篇数</Label>
+                <Label htmlFor="track-limit">采集篇数</Label>
                 <Input
                   id="track-limit"
                   type="number"
@@ -383,7 +383,7 @@ function AddAccountDialogContent({
                     setWithContent(checked === true)
                   }
                 />
-                <span>抓正文</span>
+                <span>采集正文</span>
               </label>
             </div>
 
@@ -433,7 +433,7 @@ function AddAccountDialogContent({
                 ) : (
                   <LinkIcon className="size-4" />
                 )}
-                抓取并录入
+                采集并录入
               </Button>
             ) : step === "search" ? (
               <Button
@@ -461,7 +461,7 @@ function AddAccountDialogContent({
             ) : (
               <Button type="submit" disabled={!canFetch || busy}>
                 {!busy ? <PlusIcon className="size-4" /> : null}
-                {busy ? "抓取中" : "开始抓取"}
+                {busy ? "采集中" : "开始采集"}
               </Button>
             )}
           </div>
@@ -598,13 +598,13 @@ function FetchProcess({
   const headline = localCooldown
     ? "本地保护冷却中"
     : rateLimited
-      ? "微信文章列表接口限流"
+      ? "采集已暂停"
       : latest.status === "error"
-        ? "抓取中断"
+        ? "采集中断"
         : latest.status === "warning"
           ? "部分内容需要重试"
           : latest.stage === "complete" && latest.status === "done"
-            ? "抓取完成"
+            ? "采集完成"
             : currentStep.label
 
   return (
@@ -682,8 +682,8 @@ function FetchProcess({
             <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
             <span>
               {localCooldown
-                ? "这是应用依据上一次 ret=200013 设置的本地保护，本次没有请求微信。重新登录不会解除；界面所示时间也不是微信给出的解封时间。"
-                : "微信文章列表接口刚返回 ret=200013；应用随后自行暂停该接口一小时。这个保护时间不是微信给出的解封时间，也不等于公众号后台账号异常。"}
+                ? "为避免过于频繁的请求，采集已暂时暂停，稍后会自动恢复。这是本地的冷却时间，重新登录不会改变它。"
+                : "微信侧暂时限制了本次采集，应用会自动等待后恢复，通常约一小时。这不代表你的公众号账号出现异常。"}
             </span>
           </div>
         </div>

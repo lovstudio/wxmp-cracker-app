@@ -689,7 +689,7 @@ export function ArticleList({
       onContentFetched?.(updated.aid)
       setContentSearchVersion((current) => current + 1)
       toast.success(
-        article.has_content ? "正文已重新抓取" : "正文已抓取并写入缓存"
+        article.has_content ? "正文已重新采集" : "正文已采集"
       )
     } catch (error) {
       const message = errorMessage(error)
@@ -972,7 +972,7 @@ export function ArticleList({
         pushEvent({
           stage: "content",
           status: "running",
-          message: "正在抓取正文",
+          message: "正在采集正文",
           current: index,
           total,
           title: article.title,
@@ -1004,7 +1004,7 @@ export function ArticleList({
           pushEvent({
             stage: "content",
             status: "done",
-            message: "正文已写入缓存",
+            message: "正文已采集",
             current: index + 1,
             total,
             title: article.title,
@@ -1026,7 +1026,7 @@ export function ArticleList({
           pushEvent({
             stage: "content",
             status: "warning",
-            message: `抓取失败：${message}`,
+            message: `采集失败：${message}`,
             current: index + 1,
             total,
             title: article.title,
@@ -1156,7 +1156,7 @@ export function ArticleList({
       const interrupted = await api.cancelFetchAccount(selectedAccount.fakeid)
       if (!interrupted) {
         setCancellingResume(false)
-        toast.info("当前没有可打断的抓取任务")
+        toast.info("当前没有可打断的采集任务")
       }
     } catch (error) {
       setCancellingResume(false)
@@ -1225,8 +1225,8 @@ export function ArticleList({
                     <span>补齐全部正文</span>
                     <span className="text-[11px] text-muted-foreground">
                       {missingContentCount > 0
-                        ? `逐篇抓取 ${missingContentCount.toLocaleString()} 篇缺失正文`
-                        : "所有文章正文均已抓取"}
+                        ? `逐篇采集 ${missingContentCount.toLocaleString()} 篇缺失正文`
+                        : "所有文章正文均已采集"}
                     </span>
                   </div>
                 </DropdownMenuItem>
@@ -1400,7 +1400,7 @@ export function ArticleList({
                       setResumeBatchInput(event.target.value)
                     }
                     className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
-                    aria-label="本次抓取篇数"
+                    aria-label="本次采集篇数"
                   />
                   <span>篇</span>
                 </label>
@@ -1415,7 +1415,7 @@ export function ArticleList({
                   ) : (
                     <PlayCircleIcon className="size-3.5" />
                   )}
-                  抓取首批 {resumeBatchSize} 篇
+                  采集首批 {resumeBatchSize} 篇
                 </Button>
               </div>
             )}
@@ -1807,7 +1807,7 @@ function ArticleFilterMenu({
           />
           <ArticleFilterRadioItem
             value="cached"
-            label="已抓取正文"
+            label="已采集正文"
             count={cacheCounts.cached}
           />
           <ArticleFilterRadioItem
@@ -1881,8 +1881,8 @@ function ArticleFilterMenu({
                 <span>补齐旧数据分类</span>
                 <span className="truncate text-[11px] text-muted-foreground">
                   {classificationBusy
-                    ? "正在从公众号元数据回填"
-                    : `${missingClassificationCount.toLocaleString()} 篇当前未标注，将按真实元数据回填`}
+                    ? "正在从公众号资料补全分类"
+                    : `${missingClassificationCount.toLocaleString()} 篇当前未标注，将按公众号真实资料补全分类`}
                 </span>
               </div>
             </DropdownMenuItem>
@@ -1951,7 +1951,7 @@ function articleFilterLabels(
   }
   if (filters.contentCache !== "all") {
     labels.push(
-      filters.contentCache === "cached" ? "正文：已抓取" : "正文：缺失"
+      filters.contentCache === "cached" ? "正文：已采集" : "正文：缺失"
     )
   }
   if (tagFilter !== "all") {
@@ -2075,7 +2075,7 @@ function ResumeProgressDialog({
                 : mode === "content"
                   ? `补齐 ${limit.toLocaleString()} 篇正文`
                   : mode === "classify"
-                    ? `回填 ${limit.toLocaleString()} 篇旧文章`
+                    ? `补全 ${limit.toLocaleString()} 篇旧文章`
                     : `目标 ${limit.toLocaleString()} 篇`}
             </div>
           </div>
@@ -2443,7 +2443,7 @@ function resumeSteps(mode: CollectionTask) {
   if (mode === "content") {
     return [
       { label: "确认目标", stages: ["prepare"] },
-      { label: "抓取正文", stages: ["content"] },
+      { label: "采集正文", stages: ["content"] },
       { label: "完成入库", stages: ["complete"] },
     ]
   }
@@ -2451,14 +2451,14 @@ function resumeSteps(mode: CollectionTask) {
     return [
       { label: "确认目标", stages: ["prepare"] },
       { label: "同步账号", stages: ["account"] },
-      { label: "回填分类", stages: ["articles"] },
+      { label: "补全分类", stages: ["articles"] },
       { label: "完成入库", stages: ["complete"] },
     ]
   }
   return [
     { label: "确认目标", stages: ["prepare"] },
     { label: "同步账号", stages: ["account"] },
-    { label: "续抓索引", stages: ["articles"] },
+    { label: "继续采集", stages: ["articles"] },
     { label: "完成入库", stages: ["complete"] },
   ]
 }
@@ -2555,7 +2555,7 @@ function ArticleCollectionBoundary({
     ? `已达 ${MAX_RESUME_LIMIT.toLocaleString()} 篇索引上限`
     : isForward
       ? `从列表顶部补最新索引，本次 ${fetchLimit.toLocaleString()} 篇`
-      : `从列表底部继续向旧抓取 ${fetchLimit || batchSize} 篇`
+      : `从列表底部继续向旧采集 ${fetchLimit || batchSize} 篇`
 
   return (
     <div
@@ -2586,7 +2586,7 @@ function ArticleCollectionBoundary({
               disabled={disabled || busy}
               onChange={(event) => onBatchInputChange(event.target.value)}
               className="h-7 w-16 bg-background/70 px-2 text-center text-xs"
-              aria-label="本次抓取篇数"
+              aria-label="本次采集篇数"
             />
             <span className="shrink-0">篇</span>
           </label>
@@ -2619,7 +2619,7 @@ function ArticleContentStatus({
   isFetching: boolean
 }) {
   const state = isFetching ? "fetching" : hasContent ? "cached" : "missing"
-  const label = isFetching ? "抓取中" : hasContent ? "正文已抓取" : "正文未抓取"
+  const label = isFetching ? "采集中" : hasContent ? "正文已采集" : "正文未采集"
 
   return (
     <span
@@ -2784,10 +2784,10 @@ function ArticleContextMenu({
           <DownloadIcon className="size-3.5" />
         )}
         {fetching
-          ? "正在抓取"
+          ? "正在采集"
           : article.has_content
-            ? "重新抓取正文"
-            : "抓取正文"}
+            ? "重新采集正文"
+            : "采集正文"}
       </button>
       <button
         role="menuitem"
@@ -3201,7 +3201,7 @@ async function copyArticleBasicInfo(
   accountName: string | null
 ) {
   if (!article.has_content) {
-    toast.warning("请先抓取正文，再复制包含文件地址的基本信息")
+    toast.warning("请先采集正文，再复制包含文件地址的基本信息")
     return
   }
 
@@ -3308,7 +3308,7 @@ function formatMetricsUpdateToast(snapshot: ArticlePublicMetricsSnapshot) {
     : snapshot.source_kind === "wechat_account_feed"
       ? "公众号文章列表"
       : snapshot.source_kind === "wechat_local_session"
-        ? "本机微信接口"
+        ? "本机微信"
         : "本机微信"
   return visible.length > 0
     ? `已从${source}更新：${visible.join(" · ")}`

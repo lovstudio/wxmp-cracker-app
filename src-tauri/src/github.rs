@@ -328,7 +328,7 @@ pub async fn create_repo(name: &str, private: bool) -> Result<RepoBrief> {
     let token = load_token()?.ok_or_else(|| anyhow!("尚未连接 GitHub 账号"))?;
     let body = CreateRepoBody {
         name,
-        description: "微信公众号文章归档 · 由 wxmp-cracker 自动生成",
+        description: "微信公众号文章归档 · 由微探自动生成",
         private,
         auto_init: true,
     };

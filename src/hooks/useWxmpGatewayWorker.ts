@@ -189,7 +189,7 @@ function parseFetchSelectedAccountPayload(payload: Json) {
   const nickname = stringValue(account.nickname)
 
   if (!fakeid || !nickname) {
-    throw new Error("网关请求缺少公众号 fakeid 或昵称。")
+    throw new Error("缺少公众号信息，请重新选择账号后再试。")
   }
 
   return {
@@ -212,7 +212,7 @@ function parseFetchAccountPayload(payload: Json) {
   const query = stringValue(object.query)
 
   if (!query) {
-    throw new Error("网关请求缺少公众号查询条件。")
+    throw new Error("缺少查询条件，请重新选择账号后再试。")
   }
 
   return {
@@ -227,7 +227,7 @@ function parseSearchAccountsPayload(payload: Json) {
   const query = stringValue(object.query)
 
   if (!query) {
-    throw new Error("网关请求缺少公众号查询条件。")
+    throw new Error("缺少查询条件，请重新选择账号后再试。")
   }
 
   return { query }
