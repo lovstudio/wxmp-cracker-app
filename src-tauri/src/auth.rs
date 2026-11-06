@@ -325,11 +325,10 @@ fn reset_login_capture_state(state: &LoginCaptureState, token: &str) {
 }
 
 async fn capture_and_persist(app: &AppHandle, token: &str) -> Result<()> {
-    let win = app
-        .get_webview_window(LOGIN_LABEL)
-        .ok_or_else(|| anyhow!("login window vanished"))?;
-
-    let (cookie, cookie_count) = capture_login_cookie_header(&win).await?;
+    let Some((cookie, cookie_count)) = capture_login_cookie_header(app).await? else {
+        log::info!("login window closed before its cookies were ready");
+        return Ok(());
+    };
 
     let mut cfg = WcxConfig {
         token: token.to_string(),
@@ -349,17 +348,26 @@ async fn capture_and_persist(app: &AppHandle, token: &str) -> Result<()> {
     let _ = app.emit("login://success", &cfg);
 
     // Close the login window. Main UI will refetch status.
-    let _ = win.close();
+    if let Some(win) = app.get_webview_window(LOGIN_LABEL) {
+        let _ = win.close();
+    }
     Ok(())
 }
 
-async fn capture_login_cookie_header(win: &tauri::WebviewWindow) -> Result<(String, usize)> {
+/// Returns `None` once the user has closed the login window.
+async fn capture_login_cookie_header(app: &AppHandle) -> Result<Option<(String, usize)>> {
     let login_url: Url = LOGIN_URL.parse().context("parse login URL")?;
     let mut last_error = None;
 
     for attempt in 1..=LOGIN_COOKIE_CAPTURE_ATTEMPTS {
-        match read_login_cookie_header_once(win, login_url.clone()) {
-            Ok(cookie) => return Ok(cookie),
+        // Look the window up on every attempt: asking a closed webview for its
+        // cookies panics inside Tauri, and release builds abort on panic.
+        let Some(win) = app.get_webview_window(LOGIN_LABEL) else {
+            return Ok(None);
+        };
+
+        match read_login_cookie_header_once(&win, login_url.clone()) {
+            Ok(cookie) => return Ok(Some(cookie)),
             Err(e) => {
                 last_error = Some(e);
             }
