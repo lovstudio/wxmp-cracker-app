@@ -1,0 +1,121 @@
+name: Windows login smoke
+
+# The login window's failure modes only exist on Windows, and this app is developed
+# on macOS. Dispatch with release_tag to check a package that is already published.
+on:
+  push:
+    branches:
+      - main
+      - "fix/**"
+    paths:
+      - .github/workflows/windows-login-smoke.yml
+      - scripts/build-wcx-sidecar.sh
+      - scripts/windows-login-smoke.mjs
+      - scripts/wcx-windows.manifest
+      - src-tauri/Cargo.lock
+      - src-tauri/capabilities/**
+      - src-tauri/src/auth.rs
+      - src-tauri/src/commands.rs
+      - src-tauri/src/db.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/tauri.conf.json
+      - vendor/wcx
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published tag to test instead of building, for example v0.3.18"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: ${{ inputs.release_tag == '' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        if: inputs.release_tag == ''
+        with:
+          python-version: "3.12"
+
+      - name: Build wcx sidecar
+        if: inputs.release_tag == ''
+        shell: bash
+        run: bash scripts/build-wcx-sidecar.sh x86_64-pc-windows-msvc
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: inputs.release_tag == ''
+
+      - uses: swatinem/rust-cache@v2
+        if: inputs.release_tag == ''
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.release_tag == ''
+        with:
+          bun-version: 1.3.11
+
+      - name: Install frontend dependencies
+        if: inputs.release_tag == ''
+        run: bun install --frozen-lockfile
+
+      # Same profile as the release job. The placeholders only keep licensing and
+      # the backend out of a test that never talks to them.
+      - name: Build the Windows app
+        if: inputs.release_tag == ''
+        shell: pwsh
+        env:
+          WXMP_ACTIVATION_SECRET: smoke-test-only
+          VITE_SUPABASE_URL: https://smoke.invalid
+          VITE_SUPABASE_PUBLISHABLE_KEY: smoke-test-only
+        run: |
+          bun tauri build --no-bundle
+          $exe = Get-ChildItem -Path "src-tauri\target\release" -Filter "*.exe" -File | Where-Object { $_.Name -ne "wcx.exe" } | Select-Object -First 1
+          "APP_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download the published Windows package
+        if: inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release download $env:TAG --repo "$env:GITHUB_REPOSITORY" --pattern "wxmp-cracker-app-$env:TAG-windows-x64.zip" --dir package
+          Expand-Archive -Path "package\wxmp-cracker-app-$env:TAG-windows-x64.zip" -DestinationPath app -Force
+          $exe = Get-ChildItem -Path app -Filter "*.exe" -File | Where-Object { $_.Name -ne "wcx.exe" } | Select-Object -First 1
+          "APP_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # The app sets its own browser arguments, so WebView2 ignores the environment
+      # variable. The policy key is the override it honors; this runner is disposable.
+      - name: Open a WebView2 debugging port on this runner
+        shell: pwsh
+        run: |
+          $arguments = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*"
+          foreach ($root in "HKLM:", "HKCU:") {
+            $key = "$root\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name "*" -Value $arguments -PropertyType String -Force | Out-Null
+          }
+
+      - name: Run the login window smoke test
+        run: node scripts/windows-login-smoke.mjs "$env:APP_EXE" smoke-output
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-smoke
+          path: smoke-output
+          if-no-files-found: warn
+          retention-days: 14
