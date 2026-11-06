@@ -251,8 +251,8 @@ pub async fn auth_status() -> auth::LoginStatus {
 }
 
 #[tauri::command]
-pub fn open_login(app: AppHandle) -> Result<(), CmdError> {
-    auth::open_login_window(&app).map_err(Into::into)
+pub async fn open_login(app: AppHandle) -> Result<(), CmdError> {
+    auth::open_login_window(&app).await.map_err(Into::into)
 }
 
 #[tauri::command]

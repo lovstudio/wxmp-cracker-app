@@ -29,6 +29,8 @@ const SESSION_UNCHECKED_MESSAGE: &str = "暂时无法校验微信公众号登录
 
 type LoginCaptureState = Arc<Mutex<Option<String>>>;
 
+static OPEN_LOGIN_WINDOW: Mutex<()> = Mutex::new(());
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LoginStatus {
     pub logged_in: bool,
@@ -182,7 +184,18 @@ pub async fn current_status() -> LoginStatus {
 /// host page is the mp.weixin.qq.com home with a token query param, we consider
 /// the QR scan complete: extract token, dump cookies, write to wcx config, emit
 /// `login://success` to the main webview, and close the login window.
-pub fn open_login_window(app: &AppHandle) -> Result<()> {
+///
+/// Async so that a synchronous command cannot call it: those run inside
+/// WebView2's request callback on the main thread, where creating another
+/// WebView2 waits for a completion callback that can never run, which freezes
+/// every window of the app on Windows.
+pub async fn open_login_window(app: &AppHandle) -> Result<()> {
+    // Commands no longer run one at a time on the main thread, so a double click
+    // could otherwise pass the check below twice and build the label twice.
+    let _guard = OPEN_LOGIN_WINDOW
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     if let Some(existing) = app.get_webview_window(LOGIN_LABEL) {
         if let Ok(url) = LOGIN_URL.parse() {
             let _ = existing.navigate(url);
