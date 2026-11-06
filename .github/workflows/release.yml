@@ -227,8 +227,18 @@ jobs:
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
-          xcrun stapler staple "$DMG_PATH"
-          xcrun stapler validate "$DMG_PATH"
+          # stapler asks Apple's ticket service, and one dropped connection fails the release.
+          retry_stapler() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              xcrun stapler "$@" && return 0
+              echo "stapler $1 failed on attempt $attempt" >&2
+              sleep 30
+            done
+            return 1
+          }
+          retry_stapler staple "$DMG_PATH"
+          retry_stapler validate "$DMG_PATH"
           spctl -a -vv -t open --context context:primary-signature "$DMG_PATH"
 
           case "${{ matrix.wcx_triple }}" in
@@ -260,7 +270,17 @@ jobs:
           fi
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           spctl -a -vv -t exec "$APP_PATH"
-          xcrun stapler validate "$APP_PATH"
+          # stapler asks Apple's ticket service, and one dropped connection fails the release.
+          retry_stapler() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              xcrun stapler "$@" && return 0
+              echo "stapler $1 failed on attempt $attempt" >&2
+              sleep 30
+            done
+            return 1
+          }
+          retry_stapler validate "$APP_PATH"
 
           WCX_PATH="$(find src-tauri/target -path '*/release/bundle/macos/*.app/Contents/MacOS/wcx' -type f -print -quit)"
           if [ -z "$WCX_PATH" ]; then
