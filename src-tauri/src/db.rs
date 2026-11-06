@@ -1,24 +1,53 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
-/// Locate wcx's cache.db. Mirrors wcx's own logic: macOS = ~/Library/Application Support/wcx,
-/// Linux = $XDG_DATA_HOME/wcx or ~/.local/share/wcx, Windows = %APPDATA%/wcx.
+/// Where wcx looks for config.json and cache.db. wcx decides this with platformdirs, and a
+/// login saved anywhere else never reaches it. On Windows that is %LOCALAPPDATA%\wcx\wcx.
+fn wcx_dir() -> Result<PathBuf> {
+    if cfg!(windows) {
+        let base = dirs::data_local_dir().context("no data dir")?;
+        Ok(base.join("wcx").join("wcx"))
+    } else {
+        let base = dirs::data_dir().context("no data dir")?;
+        Ok(base.join("wcx"))
+    }
+}
+
 pub fn cache_db_path() -> Result<PathBuf> {
-    let base = dirs::data_dir().context("no data dir")?;
-    Ok(base.join("wcx").join("cache.db"))
+    Ok(wcx_dir()?.join("cache.db"))
 }
 
 pub fn config_path() -> Result<PathBuf> {
-    let base = dirs::data_dir().context("no data dir")?;
-    Ok(base.join("wcx").join("config.json"))
+    Ok(wcx_dir()?.join("config.json"))
+}
+
+/// Earlier Windows releases kept cache.db in %APPDATA%\wcx. A failed move leaves the file
+/// where it was, so it is not worth failing the read over.
+fn adopt_legacy_cache_db(legacy: &Path, current: &Path) {
+    if current.exists() || !legacy.exists() {
+        return;
+    }
+    match fs::rename(legacy, current) {
+        Ok(()) => log::info!("moved cache.db from {legacy:?} to {current:?}"),
+        Err(error) => log::warn!("failed to move cache.db from {legacy:?}: {error}"),
+    }
 }
 
 fn open() -> Result<Connection> {
     let p = cache_db_path()?;
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).with_context(|| format!("mkdir {:?}", parent))?;
+    }
+    if cfg!(windows) {
+        if let Some(base) = dirs::data_dir() {
+            adopt_legacy_cache_db(&base.join("wcx").join("cache.db"), &p);
+        }
     }
     let conn = Connection::open(&p).with_context(|| format!("open {:?}", p))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -1003,6 +1032,26 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn legacy_cache_db_moves_once_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy.db");
+        let current = dir.path().join("current.db");
+
+        adopt_legacy_cache_db(&legacy, &current);
+        assert!(!current.exists(), "nothing to move");
+
+        fs::write(&legacy, "old").unwrap();
+        adopt_legacy_cache_db(&legacy, &current);
+        assert_eq!(fs::read_to_string(&current).unwrap(), "old");
+        assert!(!legacy.exists());
+
+        fs::write(&legacy, "stale").unwrap();
+        adopt_legacy_cache_db(&legacy, &current);
+        assert_eq!(fs::read_to_string(&current).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&legacy).unwrap(), "stale");
     }
 
     fn article_tag_tables() -> Connection {

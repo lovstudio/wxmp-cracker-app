@@ -47,7 +47,8 @@ impl Default for SyncSettings {
     }
 }
 
-/// Local data root for all wcx state (cache.db, settings, cloned archive repos).
+/// Local data root for settings and cloned archive repos. cache.db follows wcx instead:
+/// see `db::cache_db_path`, which differs from this on Windows.
 /// Always present once the app has run; used as a graceful reveal fallback when
 /// no GitHub archive repo is bound yet.
 pub fn data_root() -> Result<PathBuf> {
