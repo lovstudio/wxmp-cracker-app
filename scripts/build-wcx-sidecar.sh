@@ -116,6 +116,15 @@ if [[ "$TARGET_TRIPLE" == *apple-darwin ]]; then
   fi
 fi
 
+# Windows defaults to the ANSI code page for files and pipes, and a frozen app ignores
+# PYTHONUTF8, while config.json and everything exchanged with the app are UTF-8. UTF-8 mode
+# also makes curl_cffi pass its certificate path as UTF-8, and C libraries read paths in the
+# process code page. The manifest sets that to UTF-8 too (Windows 10 1903 and later), or
+# every request fails with curl error 77 for a user whose temp directory is not ASCII.
+if [[ "$TARGET_TRIPLE" == *windows* ]]; then
+  PYINSTALLER_ARGS+=(--python-option "X utf8" --manifest "$SCRIPT_DIR/wcx-windows.manifest")
+fi
+
 # Build frozen binary
 pyinstaller "${PYINSTALLER_ARGS[@]}" "$ENTRYPOINT"
 
