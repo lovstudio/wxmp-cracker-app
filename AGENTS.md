@@ -31,3 +31,4 @@ Reference complete design guide: file:///Users/mark/lovstudio/design/design-guid
 - zsh 下 `for f in $(rg -l ...)` 不做分词，批量改多文件必须用 `rg -l | while read -r f` 管道（2026-09-03, 66e2a02）
 - 创建 webview 或读取 cookie 的 Tauri 命令必须是 async：同步命令在 Windows 上跑在 WebView2 回调里，建窗口会永久死锁，macOS 复现不了；`auth::open_login_window` 写成 async，让同步命令调用不了它（2026-11-06, f549049）
 - 应用和 wcx 是两个程序：`db::wcx_dir` 必须和 wcx 的 platformdirs 一致（Windows 是 `%LOCALAPPDATA%\wcx\wcx`）；Windows 版 wcx 同时靠打包时的 `X utf8` 和 manifest 的 `activeCodePage` 处理中文，只开前者会让中文临时目录下的 curl 证书路径报错 77。这些只在 Windows 上出错，改动后看 windows-login-smoke 工作流（2026-11-06, 068d302）
+- 云端授权查询必须带用户会话：`get_wxmp_license` 只回答调用者本人或管理员，`sync_remote_license` 用当前 Lovstudio 会话的 access token 作 Bearer，publishable key 只放在 `apikey`；Rust 端带 `wxmp-cracker-app/<版本>` 的 User-Agent，靠它在 Supabase `edge_logs` 里区分新旧版本。这个函数现在归 lovstudio-home 的迁移管，`supabase/wxmp_licenses.sql` 里的副本要与最新迁移保持一致（2026-11-10, b8d8500）
