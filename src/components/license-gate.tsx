@@ -19,6 +19,7 @@ import { LicenseAdminPanel } from "@/components/license-admin-panel"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api, type LicenseStatus } from "@/lib/api"
+import { syncRemoteLicense } from "@/lib/cloud-license"
 import { isTauri } from "@/lib/tauri"
 import { copyableToast as toast } from "@/lib/toast"
 
@@ -49,7 +50,7 @@ export function LicenseGate({
     let nextStatus = await api.licenseStatus(accountId)
     if (accountId && (!nextStatus.active || nextStatus.kind !== "official")) {
       try {
-        nextStatus = await api.syncRemoteLicense(accountId)
+        nextStatus = await syncRemoteLicense(accountId)
       } catch (caughtError) {
         console.warn("Unable to sync remote license", caughtError)
       }
@@ -240,8 +241,7 @@ export function LicenseGate({
                   return
                 }
 
-                api
-                  .syncRemoteLicense(currentAccountId)
+                syncRemoteLicense(currentAccountId)
                   .then((nextStatus) => {
                     setStatus(nextStatus)
                     if (nextStatus.active) {

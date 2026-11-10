@@ -275,8 +275,13 @@ pub fn activate_license(
 }
 
 #[tauri::command]
-pub async fn sync_remote_license(account_id: String) -> Result<license::LicenseStatus, CmdError> {
-    license::sync_remote(&account_id).await.map_err(Into::into)
+pub async fn sync_remote_license(
+    account_id: String,
+    access_token: String,
+) -> Result<license::LicenseStatus, CmdError> {
+    license::sync_remote(&account_id, &access_token)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]

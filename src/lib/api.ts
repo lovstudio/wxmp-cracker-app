@@ -173,8 +173,8 @@ export const api = {
     invoke<LicenseStatus>("license_status", { accountId: accountId ?? null }),
   activateLicense: (code: string, accountId: string) =>
     invoke<LicenseStatus>("activate_license", { code, accountId }),
-  syncRemoteLicense: (accountId: string) =>
-    invoke<LicenseStatus>("sync_remote_license", { accountId }),
+  syncRemoteLicense: (accountId: string, accessToken: string) =>
+    invoke<LicenseStatus>("sync_remote_license", { accountId, accessToken }),
   generateActivationCode: (input: {
     kind: LicenseKind
     accountId: string

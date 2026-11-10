@@ -17,6 +17,7 @@ const LICENSE_FILE_NAME: &str = "license.json";
 const OFFICIAL_DAYS: i64 = 365;
 const TRIAL_DAYS: i64 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
+const REMOTE_USER_AGENT: &str = concat!("wxmp-cracker-app/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -231,9 +232,13 @@ pub async fn activation_code_for_admin(
     activation_code(kind, account_id, customer, issued_at)
 }
 
-pub async fn sync_remote(current_account_id: &str) -> Result<LicenseStatus> {
+pub async fn sync_remote(current_account_id: &str, access_token: &str) -> Result<LicenseStatus> {
     let current_account_id = normalize_account_id(current_account_id)?;
-    let remote = fetch_remote_license(&current_account_id).await?;
+    let access_token = access_token.trim();
+    if access_token.is_empty() {
+        return Err(anyhow!("Lovstudio 登录已失效，请重新登录后再同步授权。"));
+    }
+    let remote = fetch_remote_license(&current_account_id, access_token).await?;
 
     let Some(remote) = remote else {
         let local_status = status(Some(current_account_id.as_str()))?;
@@ -313,21 +318,21 @@ fn install_remote_license(
     Ok(status_from_record(&record, now, Some(current_account_id)))
 }
 
-async fn fetch_remote_license(account_id: &str) -> Result<Option<RemoteLicenseRow>> {
+async fn fetch_remote_license(
+    account_id: &str,
+    access_token: &str,
+) -> Result<Option<RemoteLicenseRow>> {
     let url = supabase_url();
     let key = supabase_publishable_key();
     if url.trim().is_empty() || key.trim().is_empty() {
         return Err(anyhow!("未配置远程授权服务。"));
     }
 
-    let endpoint = format!("{}/rest/v1/rpc/get_wxmp_license", url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header("apikey", key.as_str())
-        .bearer_auth(key.as_str())
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "_account_id": account_id }))
-        .send()
+    let client = reqwest::Client::new();
+    let request = remote_license_request(&client, &url, &key, access_token, account_id)
+        .context("构造远程授权请求失败")?;
+    let response = client
+        .execute(request)
         .await
         .context("连接远程授权服务失败")?;
 
@@ -344,6 +349,28 @@ async fn fetch_remote_license(account_id: &str) -> Result<Option<RemoteLicenseRo
     let rows: Vec<RemoteLicenseRow> =
         serde_json::from_str(&body).context("解析远程授权结果失败")?;
     Ok(rows.into_iter().next())
+}
+
+// The lookup runs as the signed-in user, because get_wxmp_license answers only for the caller's own
+// account; the publishable key on its own gets nothing. The User-Agent tells these calls apart in the
+// Supabase logs from those of 0.3.18 and older, which send none.
+fn remote_license_request(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    access_token: &str,
+    account_id: &str,
+) -> reqwest::Result<reqwest::Request> {
+    client
+        .post(format!(
+            "{}/rest/v1/rpc/get_wxmp_license",
+            url.trim_end_matches('/')
+        ))
+        .header("apikey", key)
+        .bearer_auth(access_token)
+        .header(reqwest::header::USER_AGENT, REMOTE_USER_AGENT)
+        .json(&serde_json::json!({ "_account_id": account_id }))
+        .build()
 }
 
 async fn assert_admin_access(access_token: &str) -> Result<()> {
@@ -669,5 +696,34 @@ mod tests {
         assert_eq!(payload.account_id, "34b6688b-a54f-405b-91f9-c8604baa8253");
         assert_eq!(payload.issued_at, issued_at);
         assert_eq!(payload.customer.as_deref(), Some("customer@example.com"));
+    }
+
+    #[test]
+    fn remote_license_lookup_runs_as_the_signed_in_user() {
+        let request = remote_license_request(
+            &reqwest::Client::new(),
+            "https://example.supabase.co/",
+            "sb_publishable_example",
+            "user-session-token",
+            "34b6688b-a54f-405b-91f9-c8604baa8253",
+        )
+        .expect("request");
+
+        assert_eq!(
+            request.url().as_str(),
+            "https://example.supabase.co/rest/v1/rpc/get_wxmp_license"
+        );
+        let headers = request.headers();
+        assert_eq!(headers["apikey"], "sb_publishable_example");
+        assert_eq!(headers["authorization"], "Bearer user-session-token");
+        assert_eq!(
+            headers["user-agent"],
+            concat!("wxmp-cracker-app/", env!("CARGO_PKG_VERSION"))
+        );
+        let body = request.body().and_then(|body| body.as_bytes()).expect("body");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(body).expect("json body"),
+            serde_json::json!({ "_account_id": "34b6688b-a54f-405b-91f9-c8604baa8253" })
+        );
     }
 }

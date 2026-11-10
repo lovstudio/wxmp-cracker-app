@@ -4,7 +4,7 @@ import type {
   TablesInsert,
   TablesUpdate,
 } from "@/integrations/supabase/types"
-import type { LicenseKind } from "@/lib/api"
+import { api, type LicenseKind, type LicenseStatus } from "@/lib/api"
 
 export type CloudLicense = Tables<"wxmp_licenses">
 export type CloudLicenseWithAccount = CloudLicense & {
@@ -128,6 +128,20 @@ export async function resolveUserIdByEmail(email: string): Promise<string> {
 export function licenseExpiresAt(kind: LicenseKind) {
   const durationMs = CLOUD_LICENSE_DAYS[kind] * 86_400_000
   return new Date(Date.now() + durationMs).toISOString()
+}
+
+// The cloud lookup answers only the account's own session, so sync with the current session's token
+// (getSession refreshes an expired one) and only when that session is the account being synced.
+export async function syncRemoteLicense(
+  accountId: string
+): Promise<LicenseStatus> {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) throw error
+  const session = data.session
+  if (!session || session.user.id !== accountId) {
+    throw new Error("Lovstudio 登录已失效，请重新登录后再同步授权。")
+  }
+  return api.syncRemoteLicense(accountId, session.access_token)
 }
 
 async function verifyCloudLicense(license: CloudLicense) {

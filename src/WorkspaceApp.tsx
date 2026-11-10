@@ -39,6 +39,7 @@ import {
   type LicenseStatus,
   type LoginAccount,
 } from "@/lib/api"
+import { syncRemoteLicense } from "@/lib/cloud-license"
 import { isTauri } from "@/lib/tauri"
 import { copyableToast as toast } from "@/lib/toast"
 
@@ -1044,7 +1045,7 @@ async function syncRemoteLicenseIfNeeded(
   }
 
   try {
-    return await api.syncRemoteLicense(accountId)
+    return await syncRemoteLicense(accountId)
   } catch (error) {
     console.warn("Unable to sync remote license", error)
     return status
