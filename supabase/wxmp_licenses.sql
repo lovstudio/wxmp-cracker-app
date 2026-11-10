@@ -851,8 +851,11 @@ with check (
   )
 );
 
-create or replace function public.get_wxmp_license(_account_id text)
-returns table (
+-- Owned by lovstudio-home's migrations since 2026-11-10; keep this copy identical to the latest one
+-- (supabase/migrations/20261110100000_hide_wxmp_license_customer.sql). The customer note goes only to
+-- admins and the service role.
+CREATE OR REPLACE FUNCTION public.get_wxmp_license(_account_id text)
+RETURNS TABLE (
   id uuid,
   account_id text,
   kind public.license_kind,
@@ -863,28 +866,30 @@ returns table (
   status public.license_status,
   updated_at timestamptz
 )
-language sql
-security definer
-set search_path = public
-as $$
-  select
-    wxmp_licenses.id,
-    wxmp_licenses.account_id,
-    wxmp_licenses.kind,
-    wxmp_licenses.quota_level,
-    wxmp_licenses.expires_at,
-    extract(epoch from wxmp_licenses.expires_at)::bigint as expires_at_epoch,
-    wxmp_licenses.customer,
-    wxmp_licenses.status,
-    wxmp_licenses.updated_at
-  from public.wxmp_licenses
-  where wxmp_licenses.account_id = btrim(_account_id)
-    and wxmp_licenses.status = 'active'
-    and wxmp_licenses.expires_at > now()
-  order by
-    case wxmp_licenses.kind when 'official' then 1 else 0 end desc,
-    wxmp_licenses.expires_at desc
-  limit 1;
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT
+    l.id,
+    l.account_id,
+    l.kind,
+    l.quota_level,
+    l.expires_at,
+    extract(epoch FROM l.expires_at)::bigint,
+    CASE
+      WHEN coalesce((SELECT auth.jwt() ->> 'role'), '') = 'service_role'
+        OR public.has_role((SELECT auth.uid()), 'admin')
+      THEN l.customer
+    END,
+    l.status,
+    l.updated_at
+  FROM public.wxmp_licenses l
+  WHERE l.account_id = btrim(_account_id)
+    AND l.status = 'active'
+    AND l.expires_at > now()
+  ORDER BY CASE l.kind WHEN 'official' THEN 1 ELSE 0 END DESC, l.expires_at DESC
+  LIMIT 1;
 $$;
 
 create or replace function public.get_wxmp_quota_entitlement(_account_id uuid)
